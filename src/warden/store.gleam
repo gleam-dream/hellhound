@@ -1,57 +1,44 @@
-//// A storage port for Warden's sessions (custody) and pending logins.
+//// A storage port for Warden's opaque login and custody records.
 ////
-//// By default Warden keeps both in memory, under its own supervisor: a
-//// restart signs every user out, and two nodes cannot share sessions. A
-//// durable store removes both limits. It is one table of opaque records,
-//// with three operations:
+//// Stores provide three operations: `get`, conditional `put`, and
+//// `delete_expired`. Warden owns protocol transitions and seals every record;
+//// adapters own atomic write admission and report effect knowledge honestly.
+//// Captured database pools remain application-owned. Warden bounds adapter
+//// calls in isolated workers; timing out a write cannot prove it did not act.
 ////
-//// - `get(key)` returns the record or `None`;
-//// - `put(record, expected)` writes atomically: with `None` only when no
-////   record has the key, with `Some(version)` only when the stored record
-////   has exactly that version. It returns `Ok(True)` when it wrote and
-////   `Ok(False)` when the condition did not hold (nothing written);
-//// - `delete_expired(now)` deletes records whose `expires_at` is not after
-////   `now` and returns how many it deleted.
+//// `Absent` inserts only a missing key. `AtVersion` replaces only the expected
+//// version. `AtVersionBefore` also requires the adapter's wall clock to be
+//// strictly before the supplied deadline. Check version first, then sample
+//// time under exclusive write authority, after any lock or queue wait.
+//// Missing rows and stale versions return `VersionConflict` even if expired.
+//// Refusals change no record. Only `AtVersionBefore` returns `DeadlineElapsed`.
 ////
-//// Warden keeps the whole protocol (login consumption, refresh reservation,
-//// settlement, publication, logout tombstones) and needs only this
-//// compare-and-set. In PostgreSQL it is one table:
+//// The deadline governs the protected decision, not commit acknowledgement
+//// or request completion. `Written` requires confirmation that the write
+//// succeeded. Lost acknowledgement remains `StoreOutcomeUnknown`.
+//// `Record.expires_at` governs retention and must not stand in for validity.
+//// The built-in store samples its configured Unix-second wall clock; durable
+//// adapters document their clock and precision. Hosts must synchronize clocks.
 ////
-//// ```sql
-//// create table warden_records (
-////   key text primary key,
-////   version bigint not null,
-////   expires_at timestamptz not null,
-////   sealed bytea not null
-//// );
-//// -- put(record, None):        insert ... on conflict (key) do nothing
-//// -- put(record, Some(v)):     update ... where key = $1 and version = v
-//// -- delete_expired(now):      delete ... where expires_at <= $1
-//// ```
+//// In PostgreSQL a guarded replacement can lock the row in a transaction,
+//// check its version, sample `clock_timestamp()`, and conditionally update.
+//// Transaction-start time and an UPDATE time predicate evaluated before a
+//// lock wait do not establish the required boundary. Test actual lock waits.
 ////
 //// ```gleam
-//// let records =
-////   store.new(
-////     get: fn(key) { db.get(pool, key) },
-////     put: fn(record, expected) { db.put(pool, record, expected) },
-////     delete_expired: fn(now) { db.delete_expired(pool, now) },
-////   )
+//// let records = store.new(
+////   get: fn(key) { db.get(pool, key) },
+////   put: fn(record, condition) { db.put(pool, record, condition) },
+////   delete_expired: fn(now) { db.delete_expired(pool, now) },
+//// )
 //// config.new(issuer:, client_id:, redirect_uri:, authentication:)
 //// |> config.with_custody_store(records)
 //// |> config.with_sealing_key(sealing_key)
 //// ```
 ////
-//// Every record is sealed (AES-256-GCM) with the configured sealing key and
-//// bound to its key and version, so a database reader learns no token,
-//// verifier or session reference, and a database writer cannot forge or
-//// move a session. Keys are digests: a session reference never reaches the
-//// store. One table may hold both custody and login records; their keys do
-//// not collide. `warden/testing.check_store` checks an adapter against this
-//// contract.
-////
-//// Warden bounds every call with the configured store timeout and runs it
-//// in a separate process, so a slow store fails one request instead of
-//// hanging it.
+//// `warden/testing.check_store` checks observable contract outcomes. Adapters
+//// also need queue/lock-wait and uncertain-commit tests for their own runtime.
+//// There is no legacy adapter fallback with a weaker expiry guarantee.
 
 import gleam/option.{type Option}
 import gleam/time/timestamp.{type Timestamp}
@@ -59,6 +46,22 @@ import gleam/time/timestamp.{type Timestamp}
 /// One stored record. `sealed` is opaque to the store.
 pub type Record {
   Record(key: String, version: Int, expires_at: Timestamp, sealed: BitArray)
+}
+
+/// The complete set of supported atomic write conditions.
+pub type WriteCondition {
+  Absent
+  AtVersion(version: Int)
+  AtVersionBefore(version: Int, deadline: Timestamp)
+}
+
+/// A confirmed write or a confirmed refusal. Neither refusal changes the row.
+pub type WriteOutcome {
+  Written
+  /// The key already exists for Absent, or the expected version is absent.
+  VersionConflict
+  /// The version matched, but the protected clock sample reached the deadline.
+  DeadlineElapsed
 }
 
 pub type StoreError {
@@ -75,7 +78,7 @@ pub type StoreError {
 pub opaque type Store {
   Store(
     get: fn(String) -> Result(Option(Record), StoreError),
-    put: fn(Record, Option(Int)) -> Result(Bool, StoreError),
+    put: fn(Record, WriteCondition) -> Result(WriteOutcome, StoreError),
     delete_expired: fn(Timestamp) -> Result(Int, StoreError),
   )
 }
@@ -83,7 +86,7 @@ pub opaque type Store {
 /// A store from its three operations (see the module documentation).
 pub fn new(
   get get: fn(String) -> Result(Option(Record), StoreError),
-  put put: fn(Record, Option(Int)) -> Result(Bool, StoreError),
+  put put: fn(Record, WriteCondition) -> Result(WriteOutcome, StoreError),
   delete_expired delete_expired: fn(Timestamp) -> Result(Int, StoreError),
 ) -> Store {
   Store(get:, put:, delete_expired:)
@@ -94,15 +97,14 @@ pub fn get(store: Store, key: String) -> Result(Option(Record), StoreError) {
   store.get(key)
 }
 
-/// Write a record: insert when `expected` is `None`, replace the record at
-/// version `expected` otherwise. `Ok(False)` means the condition did not
-/// hold and nothing was written.
+/// Atomically write if the condition holds. See WriteCondition and the module
+/// contract for clock authority, refusal precedence and acknowledgement.
 pub fn put(
   store: Store,
   record: Record,
-  expected: Option(Int),
-) -> Result(Bool, StoreError) {
-  store.put(record, expected)
+  condition: WriteCondition,
+) -> Result(WriteOutcome, StoreError) {
+  store.put(record, condition)
 }
 
 /// Delete the records that expired at or before `now`.

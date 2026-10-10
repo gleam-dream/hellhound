@@ -106,12 +106,12 @@ pub fn invalid_configuration_reports_every_problem_test() {
 /// A caller-owned durable store: the adapter is three functions, checked
 /// against the contract, and sessions in it are sealed.
 pub fn caller_owned_store_adapter_test() {
-  // Stands in for a database table; any compare-and-set store works.
+  // Stands in for a database table; each adapter implements the same conditional-write contract.
   let table = testing.memory_store()
   let adapter =
     store.new(
       get: fn(key) { store.get(table, key) },
-      put: fn(record, expected) { store.put(table, record, expected) },
+      put: fn(record, condition) { store.put(table, record, condition) },
       delete_expired: fn(now) { store.delete_expired(table, now) },
     )
   assert testing.check_store(adapter) == Ok(Nil)

@@ -214,7 +214,8 @@ fn touch(
     True -> {
       let touched = Entry(..entry, last_used_at: now)
       case write(custody, reference, Live(touched), version) {
-        Ok(True) -> Snapshot(reference:, entry: touched, version: version + 1)
+        Ok(store.Written) ->
+          Snapshot(reference:, entry: touched, version: version + 1)
         _ -> Snapshot(reference:, entry:, version:)
       }
     }
@@ -226,7 +227,7 @@ fn write(
   reference: String,
   stored: Stored,
   version: Int,
-) -> Result(Bool, StoreError) {
+) -> Result(store.WriteOutcome, StoreError) {
   let next = version + 1
   let expires_at = case stored {
     Live(entry) -> record_expiry(custody, entry)
@@ -240,7 +241,7 @@ fn write(
       expires_at: timestamp.from_unix_seconds(expires_at),
       sealed: seal(custody, key(reference), next, stored),
     ),
-    Some(version),
+    store.AtVersion(version),
   )
 }
 
@@ -266,8 +267,8 @@ fn transition(
         Done(answer) -> answer
         Write(stored, answer) ->
           case write(custody, reference, stored, version) {
-            Ok(True) -> answer
-            Ok(False) if remaining > 1 ->
+            Ok(store.Written) -> answer
+            Ok(store.VersionConflict) if remaining > 1 ->
               transition(
                 custody,
                 reference,
@@ -277,9 +278,10 @@ fn transition(
                 unknown,
                 step,
               )
-            Ok(False) -> conflict
+            Ok(store.VersionConflict) -> conflict
             Error(store.StoreUnavailable) -> failure(Unavailable)
-            Error(_) -> unknown
+            // An expiry refusal on an unguarded write violates the adapter contract.
+            Ok(store.DeadlineElapsed) | Error(_) -> unknown
           }
       }
     }
@@ -343,9 +345,9 @@ pub fn install(custody: Custody, command: Install) -> InstallReply {
           expires_at: timestamp.from_unix_seconds(record_expiry(custody, entry)),
           sealed: seal(custody, key(command.reference), 1, Live(entry)),
         )
-      case port.put(custody.port, record, None) {
-        Ok(True) -> Installed(1)
-        Ok(False) ->
+      case port.put(custody.port, record, store.Absent) {
+        Ok(store.Written) -> Installed(1)
+        Ok(store.VersionConflict) ->
           case read(custody, command.reference) {
             Ok(Some(#(Live(existing), _)))
               if existing.install == command.command_id
@@ -354,7 +356,7 @@ pub fn install(custody: Custody, command: Install) -> InstallReply {
             Ok(None) -> InstallUnknown
             Error(_) -> InstallUnknown
           }
-        Error(_) -> InstallUnknown
+        Ok(store.DeadlineElapsed) | Error(_) -> InstallUnknown
       }
     }
   }

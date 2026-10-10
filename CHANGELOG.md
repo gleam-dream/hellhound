@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Replace the unreleased store Option/Bool write contract with explicit conditions and outcomes. Login consumption now enforces validity inside the protected write; adapters must implement deadline admission separately from retention.
+
 - Provide independent relying-party, confidential service-client and resource-server roles through typed configuration.
 - Implement discovery/key caching, code login with S256/state/nonce, strict ID-token validation and checked identity using native Gleam over gose/kryptos.
 - Use HTTP Gun for destination-aware verified HTTPS, bounded provider requests and typed transmission evidence; expose redacted Sinal observations with caller correlation.

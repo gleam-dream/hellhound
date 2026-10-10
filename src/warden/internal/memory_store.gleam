@@ -23,16 +23,14 @@ import warden/store.{type Record, type Store, type StoreError}
 
 pub opaque type Message {
   Get(key: String, reply: Subject(Option(Record)))
-  Put(record: Record, expected: Option(Int), reply: Subject(PutReply))
+  Put(
+    record: Record,
+    condition: store.WriteCondition,
+    reply: Subject(Result(store.WriteOutcome, StoreError)),
+  )
   DeleteExpired(now: Timestamp, reply: Subject(Int))
   Epoch(reply: Subject(String))
   Size(reply: Subject(Int))
-}
-
-type PutReply {
-  Written
-  Conflict
-  Full
 }
 
 type State {
@@ -84,37 +82,31 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       process.send(reply, option.from_result(dict.get(state.records, key)))
       actor.continue(state)
     }
-    Put(record, expected, reply) -> {
-      let current = dict.get(state.records, record.key)
-      let allowed = case current, expected {
-        Error(Nil), None -> True
-        Ok(existing), Some(version) -> existing.version == version
-        _, _ -> False
-      }
-      case allowed {
-        False -> {
-          process.send(reply, Conflict)
+    Put(record, condition, reply) -> {
+      case check_condition(state, record.key, condition) {
+        Error(refusal) -> {
+          process.send(reply, Ok(refusal))
           actor.continue(state)
         }
-        True -> {
-          let state = case expected {
-            None -> make_room(state)
-            Some(_) -> state
+        Ok(Nil) -> {
+          let state = case condition {
+            store.Absent -> make_room(state)
+            store.AtVersion(_) | store.AtVersionBefore(_, _) -> state
           }
-          case expected, full(state) {
-            None, True -> {
-              process.send(reply, Full)
+          case condition, full(state) {
+            store.Absent, True -> {
+              process.send(reply, Error(store.StoreFull))
               actor.continue(state)
             }
             _, _ -> {
-              process.send(reply, Written)
-              actor.continue(
+              let state =
                 State(
                   ..state,
                   records: dict.insert(state.records, record.key, record),
                   order: fifo.push(state.order, #(record.expires_at, record.key)),
-                ),
-              )
+                )
+              process.send(reply, Ok(store.Written))
+              actor.continue(state)
             }
           }
         }
@@ -141,6 +133,29 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       process.send(reply, dict.size(state.records))
       actor.continue(state)
     }
+  }
+}
+
+// Actor ownership protects both the version check and the clock sample.
+fn check_condition(
+  state: State,
+  key: String,
+  condition: store.WriteCondition,
+) -> Result(Nil, store.WriteOutcome) {
+  case dict.get(state.records, key), condition {
+    Error(Nil), store.Absent -> Ok(Nil)
+    Ok(existing), store.AtVersion(version) if existing.version == version ->
+      Ok(Nil)
+    Ok(existing), store.AtVersionBefore(version, deadline)
+      if existing.version == version
+    -> {
+      let now = timestamp.from_unix_seconds(state.clock())
+      case timestamp.compare(now, deadline) {
+        order.Lt -> Ok(Nil)
+        order.Eq | order.Gt -> Error(store.DeadlineElapsed)
+      }
+    }
+    _, _ -> Error(store.VersionConflict)
   }
 }
 
@@ -191,11 +206,9 @@ pub fn store(subject: Subject(Message), timeout_ms: Int) -> Store {
       call.call(subject, timeout_ms, Get(key, _))
       |> result.map_error(unavailable)
     },
-    put: fn(record, expected) {
-      case call.call(subject, timeout_ms, Put(record, expected, _)) {
-        Ok(Written) -> Ok(True)
-        Ok(Conflict) -> Ok(False)
-        Ok(Full) -> Error(store.StoreFull)
+    put: fn(record, condition) {
+      case call.call(subject, timeout_ms, Put(record, condition, _)) {
+        Ok(outcome) -> outcome
         Error(_) -> Error(store.StoreOutcomeUnknown)
       }
     },

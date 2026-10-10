@@ -20,10 +20,10 @@ Warden owns checked OIDC/OAuth evidence and user-token custody. The application 
 ## Token custody and persistence
 
 - Retain `session_reference` in the protected application session and restore it for later requests. Treat the reference as a bearer secret. Keep provider access, refresh and ID-token values out of application cookies, URLs, logs and ordinary error pages.
-- Choose in-memory or durable stores before startup. In-memory custody is lost on restart. A durable adapter must implement the documented atomic version CAS and report unavailable versus unknown outcome honestly. Run `testing.check_store` and deployment-specific race, crash and durability checks.
+- Choose in-memory or durable stores before startup. In-memory custody is lost on restart. A durable adapter must implement the documented atomic write conditions (Absent, AtVersion and AtVersionBefore) and report unavailable versus unknown outcome honestly. Run `testing.check_store` and deployment-specific race, crash and durability checks.
 - Protect database writes and backups against record rollback. Sealing authenticates a record but does not establish monotonic history after whole-row restoration. Choose the application's rollback authority where that threat matters.
 - Supply sealing keys from trusted secret storage, distribute the admitted current/previous key ring consistently across nodes, and rotate before nonce use becomes unsafe. Retain old keys for the records the deployment still intends to open. Destroying a required old key makes those records unreadable.
-- Synchronize host clocks. Durable login/session lifetimes use wall-clock time; operational time budgets use monotonic time. The [expiry atomicity ruling](design/design.typ) records the unresolved distinction between expiry admission and a delayed CAS commit.
+- Synchronize host clocks. Durable login/session lifetimes use wall-clock time; operational time budgets use monotonic time. Guarded writes sample the adapter's documented clock after obtaining exclusive write authority. Login validity is checked at that decision, independently of retention and later commit acknowledgement. See [conditional writes](adr/0013-conditional-store-writes.md).
 
 ## Refresh and request retry
 

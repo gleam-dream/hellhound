@@ -25,10 +25,10 @@ pub fn get(port: Port, key: String) -> Result(Option(Record), StoreError) {
 pub fn put(
   port: Port,
   record: Record,
-  expected: Option(Int),
-) -> Result(Bool, StoreError) {
+  condition: store.WriteCondition,
+) -> Result(store.WriteOutcome, StoreError) {
   bounded(port.timeout_ms, StoreOutcomeUnknown, fn() {
-    store.put(port.store, record, expected)
+    store.put(port.store, record, condition)
   })
 }
 

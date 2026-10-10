@@ -39,8 +39,28 @@ config
 |> config.with_sealing_key(key)
 ```
 
-The [store port](../src/warden/store.gleam) requires atomic compare-and-set
-on one row. A PostgreSQL adapter can use one table and three statements. Every record is
+The [store port](../src/warden/store.gleam) has one conditional write operation.
+`Absent` inserts, `AtVersion(version)` replaces, and
+`AtVersionBefore(version, deadline)` replaces only before a validity deadline.
+Each returns `Written`, `VersionConflict` or `DeadlineElapsed`, separately from
+storage errors. Refusals leave the record unchanged; version conflicts take
+precedence over expiry. The deadline is distinct from `Record.expires_at` retention.
+
+Adapters must check the deadline under exclusive write authority after lock or
+queue waiting. A PostgreSQL adapter can lock the row, check its version and
+sample `clock_timestamp()` before updating in that transaction. An UPDATE time
+predicate alone does not establish this ordering. The clock and its precision
+must be documented; the built-in actor uses its configured Unix-second clock.
+The write must be confirmed before returning `Written`, but acknowledgement may
+arrive after the validity deadline.
+
+To migrate an unreleased adapter, replace `None`/`Some(version)` conditions with
+`Absent`/`AtVersion(version)`, and Boolean results with `Written`/`VersionConflict`.
+Implement `AtVersionBefore` explicitly; there is no weaker fallback. Preserve
+`StoreOutcomeUnknown` when the write may have happened. Decorators must forward
+the complete condition. See [ADR 0013](adr/0013-conditional-store-writes.md).
+
+Every record is
 sealed (AES-256-GCM) and bound to its key and version, and keys are
 digests, so the database holds no token, verifier or session reference.
 Check an adapter with `warden/testing.check_store` and the database-specific

@@ -262,21 +262,25 @@ pub fn tampered_records_do_not_open_test() {
   let assert Ok(Some(a)) = store.get(rig.store, key_a)
   let assert Ok(Some(b)) = store.get(rig.store, key_b)
   // b's sealed bytes under a's key.
-  let assert Ok(True) =
-    store.put(rig.store, store.Record(..b, key: key_a, version: 2), Some(1))
+  let assert Ok(store.Written) =
+    store.put(
+      rig.store,
+      store.Record(..b, key: key_a, version: 2),
+      store.AtVersion(1),
+    )
   assert custody.get(rig.custody, "ref-a") == Error(custody.Unreadable)
   // a's own bytes with another version number.
-  let assert Ok(True) =
-    store.put(rig.store, store.Record(..a, version: 3), Some(2))
+  let assert Ok(store.Written) =
+    store.put(rig.store, store.Record(..a, version: 3), store.AtVersion(2))
   assert custody.get(rig.custody, "ref-a") == Error(custody.Unreadable)
   // A flipped byte.
   let size = bit_array.byte_size(b.sealed)
   let assert Ok(head) = bit_array.slice(b.sealed, 0, size - 1)
-  let assert Ok(True) =
+  let assert Ok(store.Written) =
     store.put(
       rig.store,
       store.Record(..b, sealed: <<head:bits, 0>>, version: 2),
-      Some(1),
+      store.AtVersion(1),
     )
   assert custody.get(rig.custody, "ref-b") == Error(custody.Unreadable)
 }

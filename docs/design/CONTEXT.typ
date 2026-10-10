@@ -9,6 +9,7 @@
   (slug: "term-session", title: [Session], body: [An opaque view of confirmed custody containing verified identity, reference and revision. It is neither a token bag nor a business permission grant.]),
   (slug: "term-session-reference", title: [Session reference], body: [A random bearer value naming custody. A reference proves neither that custody still exists nor that the caller may perform a business operation.]),
   (slug: "term-custody", title: [Custody], body: [Warden's authority over session identity, authentication evidence and token generations in sealed records. It owns installation, refresh transitions and termination.]),
+  (slug: "term-write-condition", title: [Write condition], body: [The atomic admission requirement for a record write: key absence, an expected store version, or that version before a separate validity deadline.]),
   (slug: "term-store-version", title: [Store version], body: [The compare-and-set concurrency value of a stored row. It is distinct from the token revision and advances on record writes such as refresh reservation or idle touch.]),
   (slug: "term-token-revision", title: [Token revision], body: [The generation number of the material exposed by a session. It advances when refreshed material is published.]),
   (slug: "term-refresh-dispatch", title: [Refresh dispatch], body: [The fresh custody reservation authorizing one provider refresh call for one token revision. Possession of an old session or a waiting result does not create it.]),

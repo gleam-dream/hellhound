@@ -73,9 +73,9 @@ pub fn faulty(inner: Store) -> #(Store, Control) {
         faults.after_get()
         found
       },
-      put: fn(record, expected) {
+      put: fn(record, condition) {
         let lose = process.call(control, 1000, CountPut)
-        let written = store.put(inner, record, expected)
+        let written = store.put(inner, record, condition)
         case lose {
           False -> written
           True -> {

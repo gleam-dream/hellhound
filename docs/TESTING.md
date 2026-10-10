@@ -4,7 +4,22 @@
 
 - Run `nix develop -c scripts/check` for the complete local gate below. It requires the pinned sibling layout but no provider container or external issuer. Run `nix develop -c scripts/check full` to additionally execute all four disposable provider/browser suites. Full requires Docker Compose and installed Google Chrome.
 - Run `nix run .#design-gate-render -- docs/design docs/design/design-layer.pdf`, then `nix run .#design-gate-check -- docs/design .` after editing design sources or ADRs. Estimate context with `nix run .#design-gate-context -- docs/design --estimate`; use the manifest and digest to select a section.
-- Use `warden/testing` for explicitly trusted local HTTPS issuer scripts and `testing.check_store` for the general CAS port. Deployment adapters still require database-specific lock, crash, durability and rollback tests.
+- Use `warden/testing` for explicitly trusted local HTTPS issuer scripts and `testing.check_store` for the conditional-write port. Deployment adapters still require database-specific lock, crash, durability and rollback tests. Include a wait crossing the guarded deadline and a lost commit acknowledgement; the generic checker cannot create a database lock wait.
+
+## Conditional-write evidence
+
+- `check_store` checks all three conditions, exact retained bytes and metadata on
+  refusal, conflict precedence, missing rows and concurrent guarded admission.
+- Native store tests suspend the memory actor, observe a queued write, advance
+  its clock to exact expiry, and verify refusal after the actor resumes. Port
+  timeout tests preserve unknown write outcomes for guarded calls.
+- The separate consumer uses a two-second login lifetime and a 2.5-second store
+  delay. Timing assertions require admission before expiry and the write after
+  expiry. It verifies zero code exchanges on refusal or lost acknowledgement,
+  successful late acknowledgement, and idempotent custody recovery.
+- Negative compiler fixtures reject the old Option conditions and Boolean
+  results. Ordinary login, advanced configuration and native application types
+  remain covered by the existing consumer.
 
 ## Script email evidence
 

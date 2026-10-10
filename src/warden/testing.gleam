@@ -894,9 +894,11 @@ pub fn memory_store() -> Store {
 
 /// Check a store adapter against the `warden/store` contract with records
 /// under keys prefixed `warden-conformance:`: insert only when absent,
-/// compare-and-set on the version, reads of the latest write, and
+/// version and deadline conditions, refusal preservation, concurrent admission,
+/// reads of the latest write, and
 /// `delete_expired` deleting exactly the expired records. Returns every
-/// violation found. Run it against an empty test table.
+/// violation found. Run it against an empty test table. Adapters must also
+/// verify clock sampling after their own queue/lock waits and uncertain commits.
 pub fn check_store(store: Store) -> Result(Nil, List(String)) {
   let prefix = "warden-conformance:" <> secure.random_token(6) <> ":"
   let at = fn(seconds) { timestamp.from_unix_seconds(seconds) }
@@ -910,38 +912,45 @@ pub fn check_store(store: Store) -> Result(Nil, List(String)) {
       store.get(store, prefix <> "absent") == Ok(None)
     }),
     #("insert of an absent key writes", fn() {
-      store.put(store, record("a", 1, future, <<1>>), None) == Ok(True)
+      store.put(store, record("a", 1, future, <<1>>), store.Absent)
+      == Ok(store.Written)
     }),
     #("get returns the inserted record", fn() {
       store.get(store, prefix <> "a") == Ok(Some(record("a", 1, future, <<1>>)))
     }),
     #("insert of a present key is refused", fn() {
-      store.put(store, record("a", 1, future, <<2>>), None) == Ok(False)
+      store.put(store, record("a", 1, future, <<2>>), store.Absent)
+      == Ok(store.VersionConflict)
       && store.get(store, prefix <> "a")
       == Ok(Some(record("a", 1, future, <<1>>)))
     }),
     #("replace at the current version writes", fn() {
-      store.put(store, record("a", 2, future, <<3>>), Some(1)) == Ok(True)
+      store.put(store, record("a", 2, future, <<3>>), store.AtVersion(1))
+      == Ok(store.Written)
       && store.get(store, prefix <> "a")
       == Ok(Some(record("a", 2, future, <<3>>)))
     }),
     #("replace at a stale version is refused", fn() {
-      store.put(store, record("a", 3, future, <<4>>), Some(1)) == Ok(False)
+      store.put(store, record("a", 3, future, <<4>>), store.AtVersion(1))
+      == Ok(store.VersionConflict)
       && store.get(store, prefix <> "a")
       == Ok(Some(record("a", 2, future, <<3>>)))
     }),
     #("replace of an absent key is refused", fn() {
-      store.put(store, record("b", 2, future, <<5>>), Some(1)) == Ok(False)
+      store.put(store, record("b", 2, future, <<5>>), store.AtVersion(1))
+      == Ok(store.VersionConflict)
       && store.get(store, prefix <> "b") == Ok(None)
     }),
     #("binary payloads round-trip exactly", fn() {
       let bytes = crypto.strong_random_bytes(300)
-      store.put(store, record("c", 1, future, bytes), None) == Ok(True)
+      store.put(store, record("c", 1, future, bytes), store.Absent)
+      == Ok(store.Written)
       && store.get(store, prefix <> "c")
       == Ok(Some(record("c", 1, future, bytes)))
     }),
     #("delete_expired deletes expired records only", fn() {
-      let assert Ok(True) = store.put(store, record("d", 1, past, <<6>>), None)
+      let assert Ok(store.Written) =
+        store.put(store, record("d", 1, past, <<6>>), store.Absent)
       case store.delete_expired(store, at(2_000_000)) {
         Ok(deleted) ->
           deleted >= 1
@@ -952,27 +961,94 @@ pub fn check_store(store: Store) -> Result(Nil, List(String)) {
       }
     }),
     #("a record expiring exactly at now is expired", fn() {
-      let assert Ok(True) =
-        store.put(store, record("e", 1, at(3_000_000), <<7>>), None)
+      let assert Ok(store.Written) =
+        store.put(store, record("e", 1, at(3_000_000), <<7>>), store.Absent)
       store.delete_expired(store, at(3_000_000)) |> result.is_ok
       && store.get(store, prefix <> "e") == Ok(None)
     }),
     #("concurrent inserts of one key: exactly one writes", fn() {
       let results =
         concurrently(list.repeat(
-          fn() { store.put(store, record("f", 1, future, <<8>>), None) },
+          fn() { store.put(store, record("f", 1, future, <<8>>), store.Absent) },
           8,
         ))
-      list.count(results, fn(r) { r == Ok(True) }) == 1
-      && list.count(results, fn(r) { r == Ok(False) }) == 7
+      list.count(results, fn(r) { r == Ok(store.Written) }) == 1
+      && list.count(results, fn(r) { r == Ok(store.VersionConflict) }) == 7
     }),
     #("concurrent replaces at one version: exactly one writes", fn() {
       let results =
         concurrently(list.repeat(
-          fn() { store.put(store, record("f", 2, future, <<9>>), Some(1)) },
+          fn() {
+            store.put(store, record("f", 2, future, <<9>>), store.AtVersion(1))
+          },
           8,
         ))
-      list.count(results, fn(r) { r == Ok(True) }) == 1
+      list.count(results, fn(r) { r == Ok(store.Written) }) == 1
+    }),
+    #("guarded replace before its deadline writes", fn() {
+      store.put(store, record("g", 1, future, <<10>>), store.Absent)
+      == Ok(store.Written)
+      && store.put(
+        store,
+        record("g", 2, future, <<11>>),
+        store.AtVersionBefore(1, future),
+      )
+      == Ok(store.Written)
+      && store.get(store, prefix <> "g")
+      == Ok(Some(record("g", 2, future, <<11>>)))
+    }),
+    #(
+      "expired guard refuses without changing bytes, version or retention",
+      fn() {
+        store.put(
+          store,
+          record("g", 3, past, <<12>>),
+          store.AtVersionBefore(2, past),
+        )
+        == Ok(store.DeadlineElapsed)
+        && store.get(store, prefix <> "g")
+        == Ok(Some(record("g", 2, future, <<11>>)))
+      },
+    ),
+    #("guarded version conflict takes precedence over expiry", fn() {
+      store.put(
+        store,
+        record("g", 3, future, <<12>>),
+        store.AtVersionBefore(1, past),
+      )
+      == Ok(store.VersionConflict)
+      && store.get(store, prefix <> "g")
+      == Ok(Some(record("g", 2, future, <<11>>)))
+    }),
+    #("guarded replace of an absent key never inserts", fn() {
+      store.put(
+        store,
+        record("missing-guard", 2, future, <<12>>),
+        store.AtVersionBefore(1, future),
+      )
+      == Ok(store.VersionConflict)
+      && store.put(
+        store,
+        record("missing-guard", 2, future, <<12>>),
+        store.AtVersionBefore(1, past),
+      )
+      == Ok(store.VersionConflict)
+      && store.get(store, prefix <> "missing-guard") == Ok(None)
+    }),
+    #("guarded concurrency admits exactly one write", fn() {
+      let results =
+        concurrently(list.repeat(
+          fn() {
+            store.put(
+              store,
+              record("g", 3, future, <<13>>),
+              store.AtVersionBefore(2, future),
+            )
+          },
+          8,
+        ))
+      list.count(results, fn(r) { r == Ok(store.Written) }) == 1
+      && list.count(results, fn(r) { r == Ok(store.VersionConflict) }) == 7
     }),
   ]
   let failures =

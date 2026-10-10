@@ -79,10 +79,10 @@ pub fn put(
       ),
       sealed: seal(logins, key, 1, Pending(material)),
     )
-  case port.put(logins.port, record, None) {
-    Ok(True) -> Ok(Nil)
+  case port.put(logins.port, record, store.Absent) {
+    Ok(store.Written) -> Ok(Nil)
     // A state collision is not possible with 256 random bits; refuse.
-    Ok(False) -> Error(PutFailed)
+    Ok(store.VersionConflict) | Ok(store.DeadlineElapsed) -> Error(PutFailed)
     Error(store.StoreFull) -> Error(PutFull)
     Error(_) -> Error(PutFailed)
   }
@@ -106,7 +106,7 @@ pub fn get(logins: Logins, key: String) -> Result(Lookup, StoreError) {
 }
 
 /// Consume the login read at `version`. The clock is sampled for the
-/// decision itself, after `get`.
+/// early admission, after `get`; storage enforces the protected deadline.
 pub fn consume(
   logins: Logins,
   key: String,
@@ -125,9 +125,19 @@ pub fn consume(
           ),
           sealed: seal(logins, key, version + 1, Spent),
         )
-      case port.put(logins.port, record, Some(version)) {
-        Ok(True) -> Ok(Consumed(material))
-        Ok(False) ->
+      case
+        port.put(
+          logins.port,
+          record,
+          store.AtVersionBefore(
+            version,
+            timestamp.from_unix_seconds(material.expires_at),
+          ),
+        )
+      {
+        Ok(store.Written) -> Ok(Consumed(material))
+        Ok(store.DeadlineElapsed) -> Ok(Expired)
+        Ok(store.VersionConflict) ->
           case get(logins, key) {
             Ok(FoundConsumed) -> Ok(AlreadyConsumed)
             Ok(FoundExpired) -> Ok(Expired)
