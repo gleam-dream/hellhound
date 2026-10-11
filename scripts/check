@@ -23,6 +23,7 @@ scripts/negative
   gleam test
 )
 scripts/relay-recipe
+scripts/postgres-check
 nix run .#design-gate-check -- docs/design .
 if [ "$PROFILE" = full ]; then
   for suite in node keycloak interop browser; do scripts/provider-check "$suite"; done

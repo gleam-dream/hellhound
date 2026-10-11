@@ -104,3 +104,10 @@ scripts/conformance
 - The driver archives a terminal or unready setup status and its module log before starting the reference RP. This preserves the oracle's original outcome when startup would otherwise obscure it. The gate exercises the actual driver against a disposable HTTPS oracle API fixture with no RP build, including setup timeout and a ready-module control. Port 8443 must be unused for this check; stop the local conformance fixture before running the gate. Fixture results verify the driver only, not OIDC interoperability.
 - Fixture lifecycle regressions exercise real test-owned processes and local sockets: unrelated-listener survival, occupied-port refusal, normal/repeated shutdown, stale PID files, different invocation tokens, failed/interrupted startup, malformed/unreachable state and server-side token refusal. Port 19443 must be unused before running this regression. These checks establish test-tooling ownership, not relying-party protocol behavior.
 - Each workflow retains bounded artifacts with package/sibling revisions and logs; provider jobs retain image and browser identities. Artifacts exclude generated PKI/private keys. Raw checked-in history is never overwritten by a run. Dependency/advisory review, release SBOM, independent security review and unresolved native Pending updates remain separate obligations.
+
+## Optional PostgreSQL integration
+
+The canonical gate runs `scripts/postgres-check`, which owns a temporary local
+PostgreSQL cluster. `integrations/warden_postgres/test` exercises the public
+store adapter and Warden clients, independently of any application. PostgreSQL
+is a development dependency and is not added to the core Warden package.

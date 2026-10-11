@@ -1,0 +1,33 @@
+#!/bin/sh
+# Public optional-package checks against a database owned by this invocation.
+set -eu
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+WORK=$(mktemp -d)
+PORT=$((20000 + $$ % 20000))
+STARTED=0
+cleanup() {
+  status=$?
+  trap - EXIT HUP INT TERM
+  if [ "$STARTED" = 1 ]; then
+    pg_ctl -D "$WORK/data" -m fast -w stop >/dev/null || status=1
+  fi
+  if [ "$status" != 0 ] && [ -f "$WORK/postgres.log" ]; then
+    cat "$WORK/postgres.log"
+  fi
+  rm -rf "$WORK"
+  exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' HUP INT TERM
+if pg_isready -h 127.0.0.1 -p "$PORT" >/dev/null 2>&1; then
+  echo "PostgreSQL test port occupied; refusing an existing database" >&2
+  exit 1
+fi
+initdb -D "$WORK/data" --username=warden_test --auth-local=trust --auth-host=trust >/dev/null
+pg_ctl -D "$WORK/data" -o "-h 127.0.0.1 -p $PORT -k $WORK" -l "$WORK/postgres.log" -w start >/dev/null
+STARTED=1
+export WARDEN_POSTGRES_TEST_URL="postgresql://warden_test@127.0.0.1:$PORT/postgres"
+cd "$ROOT/integrations/warden_postgres"
+gleam format --check src test
+gleam build --warnings-as-errors
+gleam test

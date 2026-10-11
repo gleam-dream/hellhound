@@ -75,6 +75,7 @@
             gleam
             beam28Packages.erlang
             rebar3
+            postgresql_16
             openssl
             nodejs_22
             python3
