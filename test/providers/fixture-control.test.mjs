@@ -173,7 +173,7 @@ test("interrupted startup stops its owned process", async (t) => {
   const marker = path.join(path.dirname(base), "starting");
   await fs.writeFile(
     entry,
-    `import fs from 'node:fs';\nimport net from 'node:net';\nnet.createServer().listen(${port}, '127.0.0.1');\nfs.writeFileSync(${JSON.stringify(marker)}, 'starting');\nawait new Promise(() => {});\n`,
+    `import fs from 'node:fs';\nimport net from 'node:net';\nnet.createServer().listen(${port}, '127.0.0.1', () => fs.writeFileSync(${JSON.stringify(marker)}, 'starting'));\nawait new Promise(() => {});\n`,
   );
   const child = spawn(
     process.execPath,
@@ -243,4 +243,94 @@ test("the fixture itself rejects a forged ownership token", async (t) => {
   } finally {
     await fs.writeFile(file, original);
   }
+});
+
+async function wrapperWorkspace(t) {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "warden-wrapper-"));
+  const base = path.join(directory, "build/node-provider");
+  const entry = path.join(directory, "test/providers/node-oidc/provider.mjs");
+  const marker = path.join(directory, "discovery-wait");
+  for (const name of ["scripts", "bin", "test/providers/node-oidc"])
+    await fs.mkdir(path.join(directory, name), { recursive: true });
+  await fs.copyFile(
+    path.join(root, "scripts/node-provider"),
+    path.join(directory, "scripts/node-provider"),
+  );
+  await fs.copyFile(
+    controller,
+    path.join(directory, "test/providers/fixture-control.mjs"),
+  );
+  await fs.writeFile(
+    path.join(directory, "scripts/test-pki"),
+    "#!/bin/sh\nexit 0\n",
+    { mode: 0o755 },
+  );
+  await fs.writeFile(path.join(directory, "bin/npm"), "#!/bin/sh\nexit 0\n", {
+    mode: 0o755,
+  });
+  // Discovery refusal is external to the wrapper; the real controller owns a
+  // real listener. The marker proves startup passed control-channel admission.
+  await fs.writeFile(
+    path.join(directory, "bin/curl"),
+    `#!/bin/sh\ntouch '${marker}'\nexit 22\n`,
+    { mode: 0o755 },
+  );
+  await fs.writeFile(
+    entry,
+    "import net from 'node:net'; net.createServer(s => s.end()).listen(19443, '127.0.0.1');\n",
+  );
+  const env = {
+    ...process.env,
+    PATH: path.join(directory, "bin") + path.delimiter + process.env.PATH,
+    WARDEN_FIXTURE_OWNER: "wrapper-owner",
+  };
+  t.after(async () => {
+    await run(["down", base], {
+      env: { ...process.env, WARDEN_FIXTURE_OWNER: "" },
+    });
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+  return { directory, base, entry, marker, env };
+}
+
+test("node-provider interruption during discovery removes its own fixture", async (t) => {
+  const { directory, base, marker, env } = await wrapperWorkspace(t);
+  const child = spawn(
+    "sh",
+    [path.join(directory, "scripts/node-provider"), "up"],
+    { env, stdio: "pipe" },
+  );
+  const closed = once(child, "close");
+  t.after(async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+    await closed;
+  });
+  for (let i = 0; i < 100 && !(await fs.stat(marker).catch(() => false)); i++)
+    await delay(20);
+  assert.ok(await fs.stat(marker));
+  assert.equal(await responds(19443), true);
+  child.kill("SIGTERM");
+  assert.notEqual((await closed)[0], 0);
+  assert.equal(await responds(19443), false);
+  await assert.rejects(fs.stat(base + ".owner"), { code: "ENOENT" });
+});
+
+test("node-provider failed startup preserves another invocation's fixture", async (t) => {
+  const { directory, base, entry, env } = await wrapperWorkspace(t);
+  const owner = { ...env, WARDEN_FIXTURE_OWNER: "earlier-owner" };
+  assert.equal(
+    (await run(["up", base, entry, "19443"], { env: owner })).code,
+    0,
+  );
+  const child = spawn(
+    "sh",
+    [path.join(directory, "scripts/node-provider"), "up"],
+    { env, stdio: "pipe" },
+  );
+  assert.notEqual((await once(child, "close"))[0], 0);
+  assert.equal(await responds(19443), true);
+  const record = JSON.parse(
+    await fs.readFile(path.join(base + ".owner", "control.json"), "utf8"),
+  );
+  assert.equal(record.token, "earlier-owner");
 });
