@@ -247,3 +247,10 @@ The [native design](docs/design/design.typ), [rendered design](docs/design/desig
 [vocabulary](docs/design/CONTEXT.typ) and [coverage map](docs/COVERAGE.md) describe
 the full capability scope and unresolved requirements. [ADRs](docs/adr/0010-native-documentation-ownership.md)
 record rationale and history.
+
+## Optional PostgreSQL storage
+
+[`warden_postgres`](integrations/warden_postgres/README.md) supplies the public
+conditional-record store using a caller-owned Pog pool. Warden core does not
+depend on it. Applications still own schema initialization, pool lifetime,
+sealing keys, capacity and backup protection; the adapter owns atomic writes.
