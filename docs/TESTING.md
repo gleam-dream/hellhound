@@ -82,8 +82,9 @@ scripts/conformance
 
 ## CI checks and evidence
 
-- The mandatory CI workflow runs the canonical local gate on every push and pull request. Its final CI status rejects failed, cancelled or skipped mandatory jobs. Provider evidence runs on relevant source, fixture, toolchain and sibling-pin changes, daily, and on request.
+- The mandatory CI workflow runs the canonical local gate on pull requests and pushes to `master`. Its final CI status rejects failed, cancelled or skipped mandatory jobs. Provider evidence runs on relevant source, fixture, toolchain and sibling-pin changes, daily, and on request.
 - CI checks out Warden beside public Sinal, HTTP Gun, Relay and JSON Blueprint at the full revisions in `sibling-revisions.txt`. Checkouts use the ordinary workflow token with read-only repository permissions and do not persist credentials. Fork pull requests run the same verification jobs.
+- CI caches Hex package archives and compiler-produced path dependency fingerprints. It does not cache compiled output. Dependency preparation retries explicit Hex rate limits at most three times; other dependency failures stop the gate. Compiler and test failures are not retried.
 
 | Obligation and authority                                                        | Reproducible command                                                                                  | Cadence and owner                          | Enforcement and retained evidence                                                          |
 | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------ |
