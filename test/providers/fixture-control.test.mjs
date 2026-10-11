@@ -250,6 +250,7 @@ async function wrapperWorkspace(t) {
   const base = path.join(directory, "build/node-provider");
   const entry = path.join(directory, "test/providers/node-oidc/provider.mjs");
   const marker = path.join(directory, "discovery-wait");
+  const readiness = path.join(directory, "discovery-ready");
   for (const name of ["scripts", "bin", "test/providers/node-oidc"])
     await fs.mkdir(path.join(directory, name), { recursive: true });
   await fs.copyFile(
@@ -272,7 +273,7 @@ async function wrapperWorkspace(t) {
   // real listener. The marker proves startup passed control-channel admission.
   await fs.writeFile(
     path.join(directory, "bin/curl"),
-    `#!/bin/sh\ntouch '${marker}'\nexit 22\n`,
+    `#!/bin/sh\n[ -f '${readiness}' ] && exit 0\ntouch '${marker}'\nexit 22\n`,
     { mode: 0o755 },
   );
   await fs.writeFile(
@@ -290,7 +291,7 @@ async function wrapperWorkspace(t) {
     });
     await fs.rm(directory, { recursive: true, force: true });
   });
-  return { directory, base, entry, marker, env };
+  return { directory, base, entry, marker, readiness, env };
 }
 
 test("node-provider interruption during discovery removes its own fixture", async (t) => {
@@ -333,4 +334,39 @@ test("node-provider failed startup preserves another invocation's fixture", asyn
     await fs.readFile(path.join(base + ".owner", "control.json"), "utf8"),
   );
   assert.equal(record.token, "earlier-owner");
+});
+
+test("node-provider readiness failure removes its own fixture", async (t) => {
+  const { directory, base, env } = await wrapperWorkspace(t);
+  const child = spawn(
+    "sh",
+    [path.join(directory, "scripts/node-provider"), "up"],
+    { env, stdio: "ignore" },
+  );
+  assert.equal((await once(child, "close"))[0], 1);
+  assert.equal(await responds(19443), false);
+  await assert.rejects(fs.stat(base + ".owner"), { code: "ENOENT" });
+});
+
+test("successful node-provider startup survives refused subsequent starts", async (t) => {
+  const { directory, base, readiness, env } = await wrapperWorkspace(t);
+  await fs.writeFile(readiness, "ready");
+  async function start(token) {
+    const child = spawn(
+      "sh",
+      [path.join(directory, "scripts/node-provider"), "up"],
+      { env: { ...env, WARDEN_FIXTURE_OWNER: token }, stdio: "ignore" },
+    );
+    return (await once(child, "close"))[0];
+  }
+  assert.equal(await start("wrapper-owner"), 0);
+  const owner = await fs.readFile(base + ".owner/control.json", "utf8");
+  for (const token of ["wrapper-owner", "another-wrapper-owner"]) {
+    assert.equal(await start(token), 1);
+    assert.equal(await responds(19443), true);
+    assert.equal(
+      await fs.readFile(base + ".owner/control.json", "utf8"),
+      owner,
+    );
+  }
 });
