@@ -264,12 +264,36 @@ async function chromeVisit(url) {
   }
 }
 
+async function archiveModule(plan, module, id, info, notes) {
+  const log = await api("GET", `/api/log/${id}`);
+  fs.writeFileSync(
+    path.join(OUT, `${module}-${plan.mode}.log.json`),
+    JSON.stringify(log, null, 2),
+  );
+  return {
+    module,
+    id,
+    status: info.status,
+    result: info.result ?? "NONE",
+    notes,
+  };
+}
+
 async function runModule(plan, planId, module) {
   const { id } = await api(
     "POST",
     `/api/runner?test=${encodeURIComponent(module)}&plan=${planId}`,
   );
-  await waitStatus(id, ["WAITING", "FINISHED", "INTERRUPTED"], 30000);
+  const setup = await waitStatus(
+    id,
+    ["WAITING", "FINISHED", "INTERRUPTED"],
+    30000,
+  );
+  if (setup.status !== "WAITING") {
+    return archiveModule(plan, module, id, setup, [
+      `module setup returned ${setup.status}; reference RP was not started`,
+    ]);
+  }
   // Third-party initiation: the suite queues the initiation URL and rejects
   // provider requests until the browser visit is registered.
   let initiation = [];
@@ -350,18 +374,7 @@ async function runModule(plan, planId, module) {
       }
     }
     const info = await waitStatus(id, ["FINISHED", "INTERRUPTED"], 60000);
-    const log = await api("GET", `/api/log/${id}`);
-    fs.writeFileSync(
-      path.join(OUT, `${module}-${plan.mode}.log.json`),
-      JSON.stringify(log, null, 2),
-    );
-    return {
-      module,
-      id,
-      status: info.status,
-      result: info.result ?? "NONE",
-      notes,
-    };
+    return await archiveModule(plan, module, id, info, notes);
   } finally {
     // Wait until the RP has exited so the next module can bind the port.
     const exited = new Promise((resolve) => app.child.once("exit", resolve));
