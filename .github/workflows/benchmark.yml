@@ -27,6 +27,11 @@ jobs:
         run: |
           mkdir -p build/ci
           { git rev-parse HEAD; cat sibling-revisions.txt; } > build/ci/revisions.txt
+      - uses: ./warden/.github/actions/dependencies
+        with:
+          scope: benchmark
+          projects: |
+            .
       - name: Record observations without a latency threshold
         run: nix develop -c scripts/benchmark
       - name: Retain benchmark observations

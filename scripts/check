@@ -8,6 +8,7 @@ PROFILE=${1:-fast}
 case "$PROFILE" in fast|full) ;; *) echo "usage: $0 [fast|full]" >&2; exit 2 ;; esac
 nix flake check
 scripts/scriptlint
+python3 -B -m unittest discover -s scripts -p 'test_*.py'
 gleam format --check src test
 gleam build --warnings-as-errors
 scripts/erlang-check

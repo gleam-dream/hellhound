@@ -77,6 +77,7 @@
             rebar3
             openssl
             nodejs_22
+            python3
             actionlint
             shellcheck
             curl

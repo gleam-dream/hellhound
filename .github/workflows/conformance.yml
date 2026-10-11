@@ -38,6 +38,12 @@ jobs:
         run: |
           mkdir -p build/ci
           { git rev-parse HEAD; cat sibling-revisions.txt; } > build/ci/revisions.txt
+      - uses: ./warden/.github/actions/dependencies
+        with:
+          scope: conformance
+          projects: |
+            .
+            consumer
       - name: Prepare independent suite dependencies
         run: |
           google-chrome --version | tee build/ci/browser-version.txt

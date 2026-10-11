@@ -1,6 +1,7 @@
 name: Provider evidence
 on:
   push:
+    branches: [master]
     paths:
       [
         "src/**",
@@ -65,6 +66,14 @@ jobs:
         run: |
           mkdir -p build/ci
           { git rev-parse HEAD; cat sibling-revisions.txt; } > build/ci/revisions.txt
+      - uses: ./warden/.github/actions/dependencies
+        with:
+          scope: provider-${{ matrix.suite }}
+          projects: |
+            .
+      - name: Prepare browser consumer dependencies
+        if: matrix.suite == 'browser'
+        run: nix develop --command python3 scripts/prepare-dependencies.py consumer
       - name: Record browser identity
         if: matrix.suite == 'browser'
         run: google-chrome --version | tee build/ci/browser-version.txt
