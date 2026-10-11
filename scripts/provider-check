@@ -17,6 +17,10 @@ fi
 gleam build --warnings-as-errors
 scripts/erlang-check
 mkdir -p build/ci
+# Cleanup may follow failed startup. It must not stop another invocation's Node
+# fixture even if both commands use the same checkout and fixed provider ports.
+WARDEN_FIXTURE_OWNER=$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')
+export WARDEN_FIXTURE_OWNER
 cleanup() {
   if [ "$FIXTURE" != node-provider ]; then
     if ! "scripts/$FIXTURE" logs > "build/ci/fixture-$SUITE.log" 2>&1; then

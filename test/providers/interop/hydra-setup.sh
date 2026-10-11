@@ -14,9 +14,5 @@ curl -sf --cacert "$CA" -X POST https://localhost:14445/admin/clients -H 'conten
   "post_logout_redirect_uris": ["https://localhost:1/logged-out"],
   "token_endpoint_auth_method": "client_secret_basic"
 }' >/dev/null
-PIDFILE="$ROOT/build/hydra-consent.pid"
-[ -f "$PIDFILE" ] && kill "$(cat "$PIDFILE")" 2>/dev/null || true
-lsof -ti tcp:14446 -sTCP:LISTEN | xargs kill 2>/dev/null || true
-NODE_EXTRA_CA_CERTS="$CA" nohup node "$ROOT/test/providers/interop/hydra-consent.mjs" </dev/null >"$ROOT/build/hydra-consent.log" 2>&1 &
-echo $! >"$PIDFILE"
-sleep 1
+NODE_EXTRA_CA_CERTS="$CA" node "$ROOT/test/providers/fixture-control.mjs" up \
+  "$ROOT/build/hydra-consent" "$ROOT/test/providers/interop/hydra-consent.mjs" 14446

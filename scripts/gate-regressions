@@ -67,3 +67,4 @@ node "$WORK/pki-mode-check.cjs" "$PKI_CONTROL/build/test-pki" fresh
 "$PKI_CONTROL/scripts/test-pki"
 node "$WORK/pki-mode-check.cjs" "$PKI_CONTROL/build/test-pki" reuse
 node --test --test-concurrency=1 "$ROOT/test/conformance/verdict.test.mjs" "$ROOT/test/conformance/setup.test.mjs"
+node --test --test-concurrency=1 "$ROOT/test/providers/fixture-control.test.mjs"
