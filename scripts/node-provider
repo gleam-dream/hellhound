@@ -10,11 +10,34 @@ case "${1:-up}" in
   up)
     "$ROOT/scripts/test-pki"
     (cd "$DIR" && npm ci --no-fund --no-audit >/dev/null)
+    WARDEN_FIXTURE_OWNER=${WARDEN_FIXTURE_OWNER:-$(node -e 'console.log(require("node:crypto").randomBytes(32).toString("hex"))')}
+    export WARDEN_FIXTURE_OWNER
+    started=0
+    interrupted=0
+    cleanup() {
+      status=$?
+      trap - EXIT HUP INT TERM
+      if [ "$started" = 1 ]; then
+        node "$CONTROL" down "$BASE" || status=1
+      fi
+      exit "$status"
+    }
+    trap cleanup EXIT
+    # Let controller admission settle before deciding whether this invocation
+    # owns a fixture. Failed admission must never clean up a previous owner.
+    trap 'interrupted=1' HUP INT TERM
     node "$CONTROL" up "$BASE" "$DIR/provider.mjs" 19443
+    started=1
     i=0
-    until curl -sf --cacert "$ROOT/build/test-pki/ca.pem" https://localhost:19443/.well-known/openid-configuration >/dev/null; do
-        i=$((i + 1)); [ "$i" -gt 50 ] && { cat "$BASE.log" >&2; node "$CONTROL" down "$BASE"; exit 1; }; sleep 0.2
+    while :; do
+      [ "$interrupted" = 0 ] || exit 130
+      if curl -sf --max-time 2 --cacert "$ROOT/build/test-pki/ca.pem" https://localhost:19443/.well-known/openid-configuration >/dev/null; then
+        break
+      fi
+      i=$((i + 1)); [ "$i" -gt 50 ] && { cat "$BASE.log" >&2; exit 1; }; sleep 0.2
     done
+    [ "$interrupted" = 0 ] || exit 130
+    trap - EXIT HUP INT TERM
     echo "node provider ready: https://localhost:19443"
     ;;
   down)
