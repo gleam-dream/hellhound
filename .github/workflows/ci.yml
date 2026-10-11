@@ -1,6 +1,7 @@
 name: CI
 on:
   push:
+    branches: [master]
   pull_request:
   workflow_dispatch:
 permissions:
@@ -32,6 +33,13 @@ jobs:
         run: |
           mkdir -p build/ci
           { git rev-parse HEAD; cat sibling-revisions.txt; } > build/ci/revisions.txt
+      - uses: ./warden/.github/actions/dependencies
+        with:
+          scope: gate
+          projects: |
+            .
+            consumer
+            relay_consumer
       - name: Run canonical local gate
         run: |
           set -o pipefail
