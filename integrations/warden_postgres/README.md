@@ -8,6 +8,8 @@ yet published or production qualified.
 
 ```gleam
 let settings = warden_postgres.config(pool_name)
+  |> warden_postgres.with_schema("authentication")
+  |> warden_postgres.with_timeouts(statement_ms: 1000, lock_ms: 250)
 let assert Ok(adapter) = warden_postgres.new(settings)
 let assert Ok(Nil) = warden_postgres.initialize(adapter)
 let records = warden_postgres.records(adapter)
@@ -19,9 +21,10 @@ let settings = oidc_config
 
 `new` validates configuration without I/O. `initialize` serializes initialization
 and rejects unknown schema formats; it never imports application data. Configure
-`schema`, `statement_timeout_ms` and `lock_timeout_ms` with a `Config` record
-update. Schema names are quoted, checked for PostgreSQL's byte limit and reserved
-prefix, and never interpolated as SQL expressions.
+the opaque `Config` with `with_schema` and `with_timeouts`; both setters are pure,
+and `new` rejects invalid names or limits. Schema names are quoted, checked for
+PostgreSQL's byte limit and reserved prefix, and never interpolated as SQL
+expressions.
 
 Each callback commits its own transaction. The adapter borrows a named Pog pool,
 so it cannot accidentally commit an application's transaction. Reads return
@@ -76,6 +79,7 @@ waits crossing validity deadlines, unknown acknowledgements, session restoration
 and rotating refresh. No application-specific queue or identity policy is used.
 A lost reply decorator is explicit injected evidence, not a network-loss claim.
 
-The package uses the repository's sibling HTTP Gun and Sinal checkouts. Their
-exact source revisions are recorded in `sibling-revisions.txt`; they are Warden's
-transport and observation dependencies, not database extension points.
+Gleam fetches HTTP Gun and Sinal from the immutable Git revisions declared in
+`gleam.toml`; no sibling checkouts are required. Warden remains an in-repository
+path dependency. HTTP Gun and Sinal provide Warden's transport and observations;
+they are not database extension points.

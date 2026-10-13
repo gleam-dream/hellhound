@@ -14,7 +14,7 @@ import gleam/time/timestamp
 import pog
 import warden/store
 
-pub type Config {
+pub opaque type Config {
   Config(
     pool: process.Name(pog.Message),
     schema: String,
@@ -38,6 +38,22 @@ pub type Error {
 /// Pure defaults. Keep server limits below the caller's Warden store deadline.
 pub fn config(pool: process.Name(pog.Message)) -> Config {
   Config(pool, "warden", 1000, 250)
+}
+
+/// Select the caller-owned schema. `new` validates and quotes the name.
+pub fn with_schema(config: Config, schema: String) -> Config {
+  Config(..config, schema: schema)
+}
+
+/// Set PostgreSQL's transaction-local statement and lock limits in milliseconds.
+/// `new` requires positive limits, lock <= statement and statement <= 60 seconds.
+/// These limits do not replace Warden's outer store deadline.
+pub fn with_timeouts(
+  config: Config,
+  statement_ms statement_ms: Int,
+  lock_ms lock_ms: Int,
+) -> Config {
+  Config(..config, statement_timeout_ms: statement_ms, lock_timeout_ms: lock_ms)
 }
 
 /// Pure validation. Initialize the schema before supplying `records` to Warden.

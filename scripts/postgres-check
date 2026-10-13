@@ -2,6 +2,7 @@
 # Public optional-package checks against a database owned by this invocation.
 set -eu
 ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+"$ROOT/scripts/postgres-negative"
 WORK=$(mktemp -d)
 PORT=$((20000 + $$ % 20000))
 STARTED=0

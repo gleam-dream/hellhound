@@ -147,7 +147,9 @@ pub fn isolated_quoted_schema_survives_reinitialization_test() -> Nil {
   let config = warden_postgres.config(name)
   let assert Ok(isolated) =
     warden_postgres.new(
-      warden_postgres.Config(..config, schema: "Other\"Warden"),
+      config
+      |> warden_postgres.with_schema("Other\"Warden")
+      |> warden_postgres.with_timeouts(statement_ms: 2000, lock_ms: 250),
     )
   let assert Ok(Nil) = warden_postgres.initialize(isolated)
   let records = warden_postgres.records(isolated)
@@ -167,9 +169,7 @@ pub fn unknown_format_is_refused_by_both_initialization_and_existing_handle_test
   use name <- database
   let config = warden_postgres.config(name)
   let assert Ok(isolated) =
-    warden_postgres.new(
-      warden_postgres.Config(..config, schema: "future_warden"),
-    )
+    warden_postgres.new(warden_postgres.with_schema(config, "future_warden"))
   let assert Ok(Nil) = warden_postgres.initialize(isolated)
   let records = warden_postgres.records(isolated)
   let record = store.Record("future", 1, timestamp.from_unix_seconds(0), <<42>>)
@@ -191,14 +191,41 @@ pub fn unknown_format_is_refused_by_both_initialization_and_existing_handle_test
 
 pub fn invalid_settings_are_rejected_without_a_running_pool_test() -> Nil {
   let config = warden_postgres.config(process.new_name("absent_pool"))
-  warden_postgres.new(warden_postgres.Config(..config, schema: ""))
+  warden_postgres.new(warden_postgres.with_schema(config, ""))
   |> should.equal(Error(warden_postgres.InvalidSchema))
-  warden_postgres.new(warden_postgres.Config(..config, schema: "pg_catalog"))
+  warden_postgres.new(warden_postgres.with_schema(config, "pg_catalog"))
   |> should.equal(Error(warden_postgres.InvalidSchema))
-  warden_postgres.new(warden_postgres.Config(..config, lock_timeout_ms: 0))
+  warden_postgres.new(warden_postgres.with_timeouts(
+    config,
+    statement_ms: 1000,
+    lock_ms: 0,
+  ))
   |> should.equal(Error(warden_postgres.InvalidLimits))
-  warden_postgres.new(warden_postgres.Config(..config, lock_timeout_ms: 1001))
+  warden_postgres.new(warden_postgres.with_timeouts(
+    config,
+    statement_ms: 1000,
+    lock_ms: 1001,
+  ))
   |> should.equal(Error(warden_postgres.InvalidLimits))
+  warden_postgres.new(warden_postgres.with_timeouts(
+    config,
+    statement_ms: 0,
+    lock_ms: 1,
+  ))
+  |> should.equal(Error(warden_postgres.InvalidLimits))
+  warden_postgres.new(warden_postgres.with_timeouts(
+    config,
+    statement_ms: 60_001,
+    lock_ms: 1,
+  ))
+  |> should.equal(Error(warden_postgres.InvalidLimits))
+  warden_postgres.new(warden_postgres.with_timeouts(
+    config,
+    statement_ms: 60_000,
+    lock_ms: 60_000,
+  ))
+  |> should.be_ok
+  Nil
 }
 
 pub fn unavailable_pool_never_falls_back_or_panics_test() -> Nil {
@@ -219,13 +246,11 @@ pub fn locked_record_times_out_without_overwriting_and_pool_stays_usable_test() 
   use name <- database
   let config = warden_postgres.config(name)
   let assert Ok(limited) =
-    warden_postgres.new(
-      warden_postgres.Config(
-        ..config,
-        statement_timeout_ms: 300,
-        lock_timeout_ms: 50,
-      ),
-    )
+    warden_postgres.new(warden_postgres.with_timeouts(
+      config,
+      statement_ms: 300,
+      lock_ms: 50,
+    ))
   let records = warden_postgres.records(limited)
   let record = store.Record("locked", 1, timestamp.from_unix_seconds(0), <<42>>)
   store.put(records, record, store.Absent) |> should.equal(Ok(store.Written))
@@ -339,13 +364,11 @@ fn guarded_after_lock(change: LockedChange) -> Nil {
   use name <- database
   let config = warden_postgres.config(name)
   let assert Ok(adapter) =
-    warden_postgres.new(
-      warden_postgres.Config(
-        ..config,
-        statement_timeout_ms: 6000,
-        lock_timeout_ms: 5000,
-      ),
-    )
+    warden_postgres.new(warden_postgres.with_timeouts(
+      config,
+      statement_ms: 6000,
+      lock_ms: 5000,
+    ))
   let records = warden_postgres.records(adapter)
   let original =
     store.Record(

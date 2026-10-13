@@ -3,7 +3,7 @@
 `gleam.toml` owns admitted dependency ranges. `manifest.toml` records a concrete
 resolution; it does not qualify every version admitted by those ranges. The
 [transport decision](adr/0002-bounded-provider-transport.md) explains runtime
-ranges, sibling paths and the requirement to renew behavioral evidence after
+ranges, prerelease sibling declarations and the requirement to renew behavioral evidence after
 resolution changes. [ADR 0008](adr/0008-oracles-and-evidence-limits.md) owns the
 dated dependency/advisory observations and their limits.
 
@@ -12,7 +12,7 @@ dated dependency/advisory observations and their limits.
 | Scope                             | Authority and retained evidence                                                                                                      |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
 | Runtime cryptography              | Public gose and kryptos APIs; exact resolution/checksums in `manifest.toml`; recorded license and source attribution in ADR 0008     |
-| HTTP and observations             | HTTP Gun and Sinal sibling declarations; their manifests, licenses and package-local design layers                                   |
+| HTTP and observations             | HTTP Gun and Sinal immutable Git declarations; their manifests, licenses and package-local design layers                             |
 | Erlang/Gleam runtime dependencies | Package declarations and resolution manifest; licenses supplied with their exact sources                                             |
 | Differential oracle               | Exact oidcc test-only pin; Apache-2.0 record declarations in `test/integration/oidcc_records.hrl`; source/tag provenance in ADR 0008 |
 | Scripted provider signing         | Exact erlang-jose test-only pin; provider fixture lockfiles and notices                                                              |
@@ -22,7 +22,7 @@ dated dependency/advisory observations and their limits.
 ## Qualify a release
 
 - Record the actual package, sibling, dependency, fixture and toolchain revisions.
-  Replace unpublished sibling path dependencies with their approved release
+  Replace unpublished sibling Git dependencies with their approved release
   declarations before publication.
 - Review the resolved upstream changelogs, licenses and security advisories;
   produce the release SBOM. Check advisory-query coverage against known controls.

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Make PostgreSQL adapter configuration opaque with pure schema and timeout setters; standalone consumers resolve pinned Git dependencies automatically.
+
 - Add optional `warden_postgres` storage with a caller-owned pool, versioned schema, protected deadline decisions and standalone PostgreSQL consumer tests. Core Warden remains independent of PostgreSQL.
 
 - Replace the unreleased store Option/Bool write contract with explicit conditions and outcomes. Login consumption now enforces validity inside the protected write; adapters must implement deadline admission separately from retention.

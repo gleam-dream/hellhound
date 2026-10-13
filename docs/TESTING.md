@@ -111,3 +111,7 @@ The canonical gate runs `scripts/postgres-check`, which owns a temporary local
 PostgreSQL cluster. `integrations/warden_postgres/test` exercises the public
 store adapter and Warden clients, independently of any application. PostgreSQL
 is a development dependency and is not added to the core Warden package.
+The same check runs `scripts/postgres-negative` from a separate consumer package:
+the adapter's opaque configuration constructor must be inaccessible, and the
+public construction path must compile. Database tests exercise schema and timeout
+settings through the public setters alongside storage and recovery behavior.
