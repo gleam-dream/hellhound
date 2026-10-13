@@ -17,7 +17,7 @@ mist = ">= 6.0.3 and < 7.0.0"
 envoy = ">= 1.0.0 and < 2.0.0"
 simplifile = ">= 2.0.0 and < 3.0.0"
 warden = { path = ".." }
-sinal = { path = "../../sinal" }
+sinal = { git = "https://github.com/gleam-dream/sinal.git", ref = "4aee4c3b920bd7241da7659995dfc0a0b5767348" }
 
 [dev-dependencies]
 exception = ">= 2.1.1 and < 3.0.0"

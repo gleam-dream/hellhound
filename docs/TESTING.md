@@ -2,7 +2,7 @@
 
 ## Local checks
 
-- Run `nix develop -c scripts/check` for the complete local gate below. It requires the pinned sibling layout but no provider container or external issuer. Run `nix develop -c scripts/check full` to additionally execute all four disposable provider/browser suites. Full requires Docker Compose and installed Google Chrome.
+- Run `nix develop -c scripts/check` for the complete local gate below. Gleam resolves its pinned Git dependencies; it requires no provider container or external issuer. Run `nix develop -c scripts/check full` to additionally execute all four disposable provider/browser suites. Full requires Docker Compose and installed Google Chrome.
 - Run `nix run .#design-gate-render -- docs/design docs/design/design-layer.pdf`, then `nix run .#design-gate-check -- docs/design .` after editing design sources or ADRs. Estimate context with `nix run .#design-gate-context -- docs/design --estimate`; use the manifest and digest to select a section.
 - Use `warden/testing` for explicitly trusted local HTTPS issuer scripts and `testing.check_store` for the conditional-write port. Deployment adapters still require database-specific lock, crash, durability and rollback tests. Include a wait crossing the guarded deadline and a lost commit acknowledgement; the generic checker cannot create a database lock wait.
 
