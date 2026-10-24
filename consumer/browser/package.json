@@ -1,0 +1,10 @@
+{
+  "name": "hellhound-browser-journey",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "playwright-core": "1.63.0",
+    "@playwright/test": "1.63.0"
+  }
+}

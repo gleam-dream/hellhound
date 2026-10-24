@@ -1,0 +1,41 @@
+#!/bin/sh
+# Disposable providers only; every admitted suite must execute or fail.
+set -eu
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+SUITE=${1:-}
+case "$SUITE" in
+  node) FIXTURE=node-provider ;;
+  keycloak|browser) FIXTURE=keycloak ;;
+  interop) FIXTURE=interop ;;
+  *) echo "usage: $0 node|keycloak|interop|browser" >&2; exit 2 ;;
+esac
+if [ "$SUITE" = browser ] && ! command -v google-chrome >/dev/null 2>&1; then
+  echo "browser suite requires installed Google Chrome" >&2
+  exit 1
+fi
+# Frozen test-only JOSE 1.11.12 uses unary catch; authored Erlang stays strict below.
+ERL_COMPILER_OPTIONS='[nowarn_deprecated_catch]' gleam build --warnings-as-errors
+scripts/erlang-check
+mkdir -p build/ci
+# Cleanup may follow failed startup. It must not stop another invocation's Node
+# fixture even if both commands use the same checkout and fixed provider ports.
+HELLHOUND_FIXTURE_OWNER=$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')
+export HELLHOUND_FIXTURE_OWNER
+cleanup() {
+  if [ "$FIXTURE" != node-provider ]; then
+    if ! "scripts/$FIXTURE" logs > "build/ci/fixture-$SUITE.log" 2>&1; then
+      echo "provider diagnostics unavailable" >&2
+    fi
+  fi
+  "scripts/$FIXTURE" down
+}
+trap cleanup EXIT HUP INT TERM
+"scripts/$FIXTURE" up
+if [ "$SUITE" = browser ]; then
+  (cd consumer && gleam build --warnings-as-errors)
+  scripts/erlang-check "$ROOT/consumer"
+  scripts/browser-journey
+else
+  HELLHOUND_SUITE="$SUITE" gleam test
+fi

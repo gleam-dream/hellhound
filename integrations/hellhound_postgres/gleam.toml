@@ -1,0 +1,23 @@
+name = "hellhound_postgres"
+version = "0.1.0"
+target = "erlang"
+gleam = ">= 1.18.0"
+licences = ["Apache-2.0"]
+description = "Optional PostgreSQL storage for Hellhound's opaque conditional records."
+repository = { type = "github", user = "gleam-dream", repo = "hellhound" }
+
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+gleam_erlang = ">= 1.3.0 and < 2.0.0"
+gleam_time = ">= 1.11.0 and < 2.0.0"
+exception = ">= 2.1.1 and < 3.0.0"
+pog = ">= 4.1.0 and < 4.2.0"
+hellhound = { path = "../.." }
+http_gun = { git = "https://github.com/gleam-dream/http_gun.git", ref = "main" }
+sinal = { git = "https://github.com/gleam-dream/sinal.git", ref = "main" }
+
+[dev-dependencies]
+gleam_crypto = ">= 1.6.0 and < 2.0.0"
+gleam_http = ">= 4.4.0 and < 5.0.0"
+envoy = ">= 1.2.0 and < 2.0.0"
+gleeunit = ">= 1.0.0 and < 2.0.0"

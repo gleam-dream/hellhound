@@ -1,0 +1,67 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Local gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: hellhound
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: hellhound
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+        with:
+          extra_nix_config: experimental-features = nix-command flakes
+      - run: nix flake check
+      - run: nix run .#design-gate-check -- docs/design .
+      - name: README snippets
+        run: nix run --no-update-lock-file .#snips -- --check --commands deny README.md integrations/hellhound_postgres/README.md
+      - name: Record source revisions
+        run: |
+          mkdir -p build/ci
+          { git rev-parse HEAD; grep -rh --include=manifest.toml --exclude-dir=build --exclude-dir=node_modules 'source = "git"' . | sed -E 's/.*name = "([^"]+)".*commit = "([0-9a-f]{40})".*/\1=\2/' | sort -u; } > build/ci/revisions.txt
+      - uses: ./hellhound/.github/actions/dependencies
+        with:
+          scope: gate
+          projects: |
+            .
+            consumer
+            relay_consumer
+            integrations/hellhound_postgres
+      - name: Run canonical local gate
+        run: |
+          set -o pipefail
+          nix develop -c scripts/check 2>&1 | tee build/ci/check.log
+      - name: Retain local evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hellhound-local-evidence
+          path: hellhound/build/ci/
+          if-no-files-found: warn
+          retention-days: 14
+  ci:
+    name: CI
+    if: always()
+    needs: gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Require every mandatory job
+        env:
+          GATE_RESULT: ${{ needs.gate.result }}
+        run: test "$GATE_RESULT" = success

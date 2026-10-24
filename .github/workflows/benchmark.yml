@@ -1,0 +1,45 @@
+name: Benchmark observations
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: hellhound
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          path: hellhound
+          persist-credentials: false
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31
+        with:
+          extra_nix_config: experimental-features = nix-command flakes
+      - name: Record source revisions
+        run: |
+          mkdir -p build/ci
+          { git rev-parse HEAD; grep -rh --include=manifest.toml --exclude-dir=build --exclude-dir=node_modules 'source = "git"' . | sed -E 's/.*name = "([^"]+)".*commit = "([0-9a-f]{40})".*/\1=\2/' | sort -u; } > build/ci/revisions.txt
+      - uses: ./hellhound/.github/actions/dependencies
+        with:
+          scope: benchmark
+          projects: |
+            .
+      - name: Record observations without a latency threshold
+        run: nix develop -c scripts/benchmark
+      - name: Retain benchmark observations
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hellhound-benchmark-observations
+          path: |
+            hellhound/build/benchmark/
+            hellhound/build/ci/revisions.txt
+          if-no-files-found: warn
+          retention-days: 30
