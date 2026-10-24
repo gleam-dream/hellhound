@@ -1,0 +1,385 @@
+//// The Gleam transport against real local TLS servers.
+
+import gleam/bit_array
+import gleam/dynamic.{type Dynamic}
+import gleam/dynamic/decode
+import gleam/int
+import gleam/json
+import gleam/list
+import gleam/option.{None, Some}
+import gleam/string
+import oidcc_transport
+import warden/internal/transport.{Failure, Ipv4, Ipv6, NotSent, Sent}
+import warden_test_support as support
+
+fn policy() -> transport.Policy {
+  transport.Policy(
+    ..transport.policy(transport.Anchors([support.ca_der()])),
+    allow_loopback: True,
+    timeout_ms: 2000,
+    max_body: 4096,
+  )
+}
+
+fn get(policy: transport.Policy, url: String) {
+  transport.send(
+    policy,
+    transport.Request(
+      transport.Get,
+      url,
+      [#("accept", "application/json")],
+      None,
+    ),
+  )
+}
+
+fn with_server(
+  cert: String,
+  kind: support.Canned,
+  run: fn(support.TestServer) -> a,
+) -> a {
+  let server = support.server_start(cert, kind)
+  let result = run(server)
+  support.server_stop(server)
+  result
+}
+
+pub fn verified_tls_succeeds_test() {
+  use s <- with_server("localhost", support.OkJson)
+  let assert Ok(response) = get(policy(), support.server_url(s, "/x"))
+  assert response.status == 200
+  assert response.body == <<"{\"a\":1}":utf8>>
+  assert list.key_find(response.headers, "content-type")
+    == Ok("application/json")
+}
+
+pub fn loopback_rejected_by_default_before_connect_test() {
+  use s <- with_server("localhost", support.OkJson)
+  let p = transport.Policy(..policy(), allow_loopback: False)
+  assert get(p, support.server_url(s, "/x"))
+    == Error(Failure(NotSent, transport.DestinationRejected))
+  support.sleep(50)
+  assert support.server_requests(s) == 0
+}
+
+pub fn certificate_failures_are_rejected_before_send_test() {
+  list.each(["wrong_host", "self_signed", "expired"], fn(cert) {
+    use s <- with_server(cert, support.OkJson)
+    assert #(cert, get(policy(), support.server_url(s, "/x")))
+      == #(cert, Error(Failure(NotSent, transport.TlsRejected)))
+  })
+}
+
+/// An IP-literal URL must still match the certificate (iPAddress SAN): the
+/// `localhost` leaf names 127.0.0.1, the `wrong_host` leaf does not.
+pub fn ip_literal_hosts_are_verified_against_the_certificate_test() {
+  let ip_url = fn(s, path) {
+    string.replace(
+      support.server_url(s, path),
+      "://localhost:",
+      "://127.0.0.1:",
+    )
+  }
+  {
+    use s <- with_server("localhost", support.OkJson)
+    let assert Ok(response) = get(policy(), ip_url(s, "/x"))
+    assert response.status == 200
+  }
+  use s <- with_server("wrong_host", support.OkJson)
+  assert get(policy(), ip_url(s, "/x"))
+    == Error(Failure(NotSent, transport.TlsRejected))
+}
+
+pub fn system_trust_does_not_accept_the_test_ca_test() {
+  use s <- with_server("localhost", support.OkJson)
+  let p = transport.Policy(..policy(), trust: transport.SystemTrust)
+  assert get(p, support.server_url(s, "/x"))
+    == Error(Failure(NotSent, transport.TlsRejected))
+}
+
+pub fn redirect_is_returned_not_followed_test() {
+  use s <- with_server("localhost", support.Redirect)
+  let assert Ok(response) = get(policy(), support.server_url(s, "/x"))
+  assert response.status == 302
+  support.sleep(50)
+  assert support.server_requests(s) == 1
+}
+
+pub fn response_bounds_test() {
+  let cases = [
+    #(support.DeclaredOversize, transport.BodyTooLarge),
+    #(support.EndlessChunked, transport.BodyTooLarge),
+    #(support.CloseDelimitedOversize, transport.BodyTooLarge),
+    #(support.ManyHeaders, transport.HeadersTooLarge),
+    #(support.BigHeaderLine, transport.HeadersTooLarge),
+    #(support.Gzip, transport.UnsupportedContentEncoding),
+    // Gun reports these only as a peer close or a
+    // dependency crash, so they are rejections without a finer class.
+    #(support.Truncated, transport.ReceiveFailed),
+    #(support.BadStatus, transport.ReceiveFailed),
+  ]
+  list.each(cases, fn(c) {
+    use s <- with_server("localhost", c.0)
+    assert #(c.0, get(policy(), support.server_url(s, "/x")))
+      == #(c.0, Error(Failure(Sent, c.1)))
+  })
+}
+
+pub fn chunked_and_interim_responses_decode_test() {
+  {
+    use s <- with_server("localhost", support.ChunkedOk)
+    let assert Ok(response) = get(policy(), support.server_url(s, "/x"))
+    assert response.body == <<"{\"a\":1}":utf8>>
+  }
+  use s <- with_server("localhost", support.Interim)
+  let assert Ok(response) = get(policy(), support.server_url(s, "/x"))
+  assert response.status == 200
+  assert response.body == <<"ok":utf8>>
+}
+
+pub fn deadline_covers_the_exchange_test() {
+  use s <- with_server("localhost", support.Slow)
+  let p = transport.Policy(..policy(), timeout_ms: 300)
+  assert get(p, support.server_url(s, "/x"))
+    == Error(Failure(Sent, transport.Timeout))
+}
+
+pub fn request_shape_is_validated_before_send_test() {
+  assert get(policy(), "http://localhost:1/x")
+    == Error(Failure(NotSent, transport.InsecureScheme))
+  assert get(policy(), "https://user:pw@localhost:1/x")
+    == Error(Failure(NotSent, transport.InvalidDestination))
+  assert get(policy(), "https://localhost:1/x#f")
+    == Error(Failure(NotSent, transport.InvalidDestination))
+  use s <- with_server("localhost", support.OkJson)
+  assert transport.send(
+      policy(),
+      transport.Request(
+        transport.Get,
+        support.server_url(s, "/x"),
+        [#("x-evil", "a\r\nhost: other")],
+        None,
+      ),
+    )
+    == Error(Failure(NotSent, transport.InvalidRequest))
+}
+
+pub fn connection_refused_is_not_sent_test() {
+  assert get(policy(), "https://localhost:1/x")
+    == Error(Failure(NotSent, transport.ConnectionRefused))
+}
+
+pub fn destination_policy_test() {
+  let resolver = fn(addresses) { Some(fn(_host, _timeout) { Ok(addresses) }) }
+  let p = fn(addresses) {
+    transport.Policy(
+      ..policy(),
+      allow_loopback: False,
+      resolver: resolver(addresses),
+    )
+  }
+  assert get(p([Ipv4(10, 0, 0, 7)]), "https://idp.example/x")
+    == Error(Failure(NotSent, transport.DestinationRejected))
+  assert get(
+      p([Ipv4(93, 184, 216, 34), Ipv4(169, 254, 169, 254)]),
+      "https://idp.example/x",
+    )
+    == Error(Failure(NotSent, transport.DestinationRejected))
+  assert get(
+      transport.Policy(..policy(), allowed_hosts: Some(["idp.example"])),
+      "https://evil.example/x",
+    )
+    == Error(Failure(NotSent, transport.DestinationRejected))
+  assert get(
+      transport.Policy(..policy(), resolver: Some(fn(_, _) { Ok([]) })),
+      "https://idp.example/x",
+    )
+    == Error(Failure(NotSent, transport.ResolutionFailed))
+}
+
+/// The destination is resolved once; the connection uses that answer.
+pub fn resolution_happens_once_test() {
+  use s <- with_server("localhost", support.OkJson)
+  let counter = support.clock_new(0)
+  let resolver = fn(_host, _timeout) {
+    let n = support.clock_read(counter) + 1
+    support.clock_set(counter, n)
+    case n {
+      1 -> Ok([Ipv4(127, 0, 0, 1)])
+      _ -> Ok([Ipv4(10, 0, 0, 1)])
+    }
+  }
+  let assert Ok(_) =
+    get(
+      transport.Policy(..policy(), resolver: Some(resolver)),
+      support.server_url(s, "/x"),
+    )
+  assert support.clock_read(counter) == 1
+}
+
+pub fn classify_address_test() {
+  let cases = [
+    #(Ipv4(8, 8, 8, 8), transport.Public),
+    #(Ipv4(127, 0, 0, 1), transport.Loopback),
+    #(Ipv4(10, 1, 2, 3), transport.Private),
+    #(Ipv4(172, 16, 0, 1), transport.Private),
+    #(Ipv4(172, 32, 0, 1), transport.Public),
+    #(Ipv4(192, 168, 1, 1), transport.Private),
+    #(Ipv4(169, 254, 169, 254), transport.Reserved),
+    #(Ipv4(100, 64, 0, 1), transport.Private),
+    #(Ipv4(0, 0, 0, 0), transport.Reserved),
+    #(Ipv4(224, 0, 0, 1), transport.Reserved),
+    #(Ipv4(255, 255, 255, 255), transport.Reserved),
+    #(Ipv6(0, 0, 0, 0, 0, 0, 0, 1), transport.Loopback),
+    #(Ipv6(0, 0, 0, 0, 0, 0xFFFF, 0xA9FE, 0xA9FE), transport.Reserved),
+    #(Ipv6(0, 0, 0, 0, 0, 0xFFFF, 0x7F00, 1), transport.Loopback),
+    #(Ipv6(0xFD00, 0, 0, 0, 0, 0, 0, 1), transport.Private),
+    #(Ipv6(0xFE80, 0, 0, 0, 0, 0, 0, 1), transport.Reserved),
+    #(Ipv6(0x2606, 0x4700, 0, 0, 0, 0, 0, 1), transport.Public),
+    #(Ipv6(0x64, 0xFF9B, 0, 0, 0, 0, 0x0A00, 1), transport.Private),
+    // Cloud metadata services inside ranges `allow_private` admits stay
+    // reserved, like 169.254.169.254.
+    #(Ipv6(0xFD00, 0xEC2, 0, 0, 0, 0, 0, 0x254), transport.Reserved),
+    #(Ipv4(100, 100, 100, 200), transport.Reserved),
+    // IPv6 special-purpose ranges that are not public unicast:
+    // Teredo, benchmarking, ORCHID v1/v2, documentation 3fff::/20.
+    #(Ipv6(0x2001, 0, 0x4136, 0xE378, 0, 0, 0, 1), transport.Reserved),
+    #(Ipv6(0x2001, 2, 0, 0, 0, 0, 0, 1), transport.Reserved),
+    #(Ipv6(0x2001, 0x10, 0, 0, 0, 0, 0, 1), transport.Reserved),
+    #(Ipv6(0x2001, 0x2F, 0, 0, 0, 0, 0, 1), transport.Reserved),
+    #(Ipv6(0x3FFF, 0x0FFF, 0, 0, 0, 0, 0, 1), transport.Reserved),
+    #(Ipv6(0x3FFF, 0x1000, 0, 0, 0, 0, 0, 1), transport.Public),
+  ]
+  list.each(cases, fn(c) {
+    assert #(c.0, transport.classify(c.0)) == #(c.0, c.1)
+  })
+}
+
+// --- oidcc adapter -------------------------------------------------------------
+
+@external(erlang, "warden_test_support_ffi", "adapter_request")
+fn adapter_request(adapter: a, url: String) -> decode.Dynamic
+
+pub fn oidcc_adapter_reduces_error_bodies_test() {
+  let adapter = oidcc_transport.adapter(policy())
+  {
+    use s <- with_server("localhost", support.ErrorBody)
+    let assert Ok(#(400, body)) =
+      decode.run(
+        adapter_request(adapter, support.server_url(s, "/x")),
+        status_body(),
+      )
+    let assert Ok(text) = bit_array.to_string(body)
+    assert json.parse(text, decode.at(["error"], decode.string))
+      == Ok("invalid_grant")
+    assert text == "{\"error\":\"invalid_grant\"}"
+  }
+  {
+    use s <- with_server("localhost", support.HtmlError)
+    assert decode.run(
+        adapter_request(adapter, support.server_url(s, "/x")),
+        status_body(),
+      )
+      == Ok(#(500, <<>>))
+  }
+  use s <- with_server("localhost", support.BadJson)
+  assert decode.run(
+      adapter_request(adapter, support.server_url(s, "/x")),
+      decode.string,
+    )
+    == Ok("sent:malformed_response")
+}
+
+fn status_body() -> decode.Decoder(#(Int, BitArray)) {
+  use status <- decode.field(0, decode.int)
+  use body <- decode.field(1, decode.bit_array)
+  decode.success(#(status, body))
+}
+
+/// The header limit holds for the whole head, including the last read.
+pub fn header_limit_covers_the_final_read_test() {
+  use s <- with_server("localhost", support.HeaderOvershoot)
+  assert get(policy(), support.server_url(s, "/x"))
+    == Error(Failure(Sent, transport.HeadersTooLarge))
+}
+
+/// Request bodies are small form posts; a large one is refused before
+/// connecting, so a peer that stops reading cannot stall the send.
+pub fn large_request_bodies_are_refused_before_send_test() {
+  use s <- with_server("localhost", support.OkJson)
+  let body = Some(<<string.repeat("a", transport.max_request_body + 1):utf8>>)
+  assert transport.send(
+      policy(),
+      transport.Request(transport.Post, support.server_url(s, "/x"), [], body),
+    )
+    == Error(Failure(NotSent, transport.InvalidRequest))
+  support.sleep(50)
+  assert support.server_requests(s) == 0
+}
+
+/// Response framing is strict: CRLF only, no control characters in the
+/// head, digits only in lengths.
+pub fn lenient_framing_is_refused_test() {
+  list.each(
+    [
+      #(support.ControlInHeader, transport.MalformedResponse),
+      // Rejected, reported without a finer class.
+      #(support.SignedContentLength, transport.ReceiveFailed),
+      #(support.SignedChunkSize, transport.ReceiveFailed),
+    ],
+    fn(c) {
+      use s <- with_server("localhost", c.0)
+      assert #(c.0, get(policy(), support.server_url(s, "/x")))
+        == #(c.0, Error(Failure(Sent, c.1)))
+    },
+  )
+}
+
+/// A bare LF in the
+/// status line is read as part of the reason phrase, which Gun discards, and
+/// the body is read to the connection's close. Nothing reaches another
+/// request: the connection is not reused after a close-delimited body.
+pub fn bare_lf_in_status_line_is_read_as_reason_phrase_test() {
+  use s <- with_server("localhost", support.BareLfHead)
+  let assert Ok(response) = get(policy(), support.server_url(s, "/x"))
+  assert response.status == 200
+  assert response.headers == []
+  assert response.body == <<"ok":utf8>>
+}
+
+/// IPv6 literals are bracketed in the Host header HTTP Gun sends.
+/// The default port 443 cannot be bound by an unprivileged test.
+pub fn host_header_brackets_ipv6_literals_test() {
+  let #(port, server) = probe_capture_server(ipv6_loopback(), 0, "ipv6")
+  let p = int.to_string(port)
+  let assert Ok(response) = get(policy(), "https://[::1]:" <> p <> "/x")
+  assert response.status == 200
+  let heads =
+    probe_heads(server)
+    |> list.filter_map(bit_array.to_string)
+    |> list.map(string.lowercase)
+  assert list.any(heads, string.contains(_, "host: [::1]:" <> p <> "\r\n"))
+  probe_stop(server)
+}
+
+type ProbeServer
+
+@external(erlang, "warden_transport_probe_ffi", "capture_server")
+fn probe_capture_server(
+  address: Dynamic,
+  port: Int,
+  cert: String,
+) -> #(Int, ProbeServer)
+
+@external(erlang, "warden_transport_probe_ffi", "heads")
+fn probe_heads(server: ProbeServer) -> List(BitArray)
+
+@external(erlang, "warden_transport_probe_ffi", "stop")
+fn probe_stop(server: ProbeServer) -> Nil
+
+@external(erlang, "gleam_stdlib", "identity")
+fn to_dynamic(value: a) -> Dynamic
+
+fn ipv6_loopback() -> Dynamic {
+  to_dynamic(#(0, 0, 0, 0, 0, 0, 0, 1))
+}

@@ -1,0 +1,39 @@
+#!/bin/sh
+# Verify adapter constructor privacy from a separate consumer package.
+set -eu
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+WORK="$ROOT/build/postgres-negative"
+rm -rf "$WORK"
+mkdir -p "$WORK/src"
+cat >"$WORK/gleam.toml" <<TOML
+name = "postgres_negative"
+version = "0.0.0"
+target = "erlang"
+[dependencies]
+gleam_stdlib = ">= 1.0.0 and < 2.0.0"
+warden_postgres = { path = "$ROOT/integrations/warden_postgres" }
+TOML
+python3 "$ROOT/scripts/prepare-dependencies.py" "$WORK"
+for file in "$ROOT"/integrations/warden_postgres/test_negative/*.gleam; do
+  name=$(basename "$file" .gleam)
+  expect=$(sed -n 's#^// expect: ##p' "$file" | head -1)
+  cp "$file" "$WORK/src/negative.gleam"
+  if output=$(cd "$WORK" && gleam build 2>&1); then
+    echo "FAIL $name: compiled but must not" >&2
+    exit 1
+  elif printf '%s' "$output" | grep -q -- "$expect"; then
+    echo "ok   $name"
+  else
+    printf '%s\n' "$output" >&2
+    echo "FAIL $name: error does not mention '$expect'" >&2
+    exit 1
+  fi
+done
+cat >"$WORK/src/negative.gleam" <<'GLEAM'
+import warden_postgres
+pub fn main(settings: warden_postgres.Config) -> Result(warden_postgres.Adapter, warden_postgres.Error) {
+  warden_postgres.new(settings)
+}
+GLEAM
+(cd "$WORK" && gleam build --warnings-as-errors)
+echo "ok   postgres positive control"

@@ -1,0 +1,8 @@
+build/
+erl_crash.dump
+*.beam
+.direnv/
+node_modules/
+test/conformance/mongo/
+.render/
+**/.render/

@@ -1,0 +1,7 @@
+#!/bin/sh
+# Build and run the separate Relay integration consumer.
+set -eu
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT/relay_consumer"
+gleam build --warnings-as-errors
+gleam test
