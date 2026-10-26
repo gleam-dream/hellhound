@@ -13,8 +13,8 @@ gleam_time = ">= 1.11.0 and < 2.0.0"
 exception = ">= 2.1.1 and < 3.0.0"
 pog = ">= 4.1.0 and < 4.2.0"
 hellhound = { path = "../.." }
-http_gun = { git = "https://github.com/gleam-dream/http_gun.git", ref = "main" }
-sinal = { git = "https://github.com/gleam-dream/sinal.git", ref = "main" }
+http_gun = { git = "https://github.com/gleam-dream/http_gun.git", ref = "b2fe1d7cd0ea121e679cdf2c4af5b078330c33e7" }
+sinal = { git = "https://github.com/gleam-dream/sinal.git", ref = "95f2dbce4459942e16e819e3527eb00d9c503c9d" }
 
 [dev-dependencies]
 gleam_crypto = ">= 1.6.0 and < 2.0.0"
