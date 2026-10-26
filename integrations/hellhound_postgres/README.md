@@ -4,6 +4,21 @@ A PostgreSQL adapter for Hellhound's public `hellhound/store` contract. It borro
 caller-owned Pog pool, adds no application membership rules or FFI, and keeps
 PostgreSQL out of Hellhound core. It is unpublished and not production qualified.
 
+## Installation
+
+Add Hellhound and Pog from Hex and the PostgreSQL adapter from its Git subdirectory:
+
+```toml
+[dependencies]
+hellhound = ">= 0.1.0 and < 0.2.0"
+pog = ">= 4.1.0 and < 4.2.0"
+hellhound_postgres = { git = "https://github.com/gleam-dream/hellhound.git", ref = "main", path = "integrations/hellhound_postgres" }
+```
+
+Commit `gleam.toml` and `manifest.toml` to retain the resolved versions and Git commit.
+
+## Configure the store
+
 The adapter tests configure a separate schema on a caller-owned pool `name`:
 
 <!-- prettier-ignore-start -->

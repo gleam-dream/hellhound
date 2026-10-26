@@ -4,7 +4,7 @@ OIDC login, OAuth 2.0 tokens and JWT access-token validation for Gleam on
 Erlang/OTP. Hellhound manages provider discovery, signing keys and token custody;
 your application owns its accounts, session cookies and permission checks.
 
-This checkout is unreleased and pre-production. Production use requires the
+This package is pre-production. Production use requires the
 [release conditions](docs/design/design-layer.pdf) and independent security review of
 Hellhound-owned code. Hellhound is not certified.
 
@@ -29,17 +29,17 @@ session and authorization policy.
 
 ## Installation
 
-Requires Gleam 1.18 or later and the Erlang target. Add Hellhound to your application's
-`gleam.toml`; Gleam fetches its Git dependencies without sibling checkouts:
+Requires Gleam 1.18 or later and the Erlang target. Add Hellhound from Hex:
 
-```toml
-[dependencies]
-hellhound = { git = "https://github.com/gleam-dream/hellhound.git", ref = "main" }
+```sh
+gleam add hellhound
 ```
 
-Commit `manifest.toml` to retain the resolved revisions. The
+Commit `gleam.toml` and `manifest.toml` to retain the resolved versions. The
 [reference application](consumer/) includes the HTTP dependencies and route
 integration used below.
+The optional [PostgreSQL adapter](integrations/hellhound_postgres/README.md)
+installs from a Git subdirectory.
 
 ## Sign a user in, then call an API
 
