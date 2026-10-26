@@ -62,7 +62,13 @@ jobs:
       - name: Record source revisions
         run: |
           mkdir -p build/ci
-          { git rev-parse HEAD; grep -rh --include=manifest.toml --exclude-dir=build --exclude-dir=node_modules 'source = "git"' . | sed -E 's/.*name = "([^"]+)".*commit = "([0-9a-f]{40})".*/\1=\2/' | sort -u; } > build/ci/revisions.txt
+          {
+            git rev-parse HEAD
+            for manifest in manifest.toml consumer/manifest.toml relay_consumer/manifest.toml integrations/hellhound_postgres/manifest.toml; do
+              printf '\n%s\n' "$manifest"
+              cat "$manifest"
+            done
+          } > build/ci/revisions.txt
       - uses: ./hellhound/.github/actions/dependencies
         with:
           scope: provider-${{ matrix.suite }}
