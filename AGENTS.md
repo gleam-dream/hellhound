@@ -15,7 +15,7 @@
 - `nix fmt`: formats the whole repo via treefmt (`gleam format`, `nixfmt`, `prettier`).
 - `lefthook`: pre-commit hook formats staged files and re-stages them.
 - `nix flake check`: fails iff the tree is not formatted (plus any existing checks).
-- Published sibling packages (Sinal, HTTP Gun, Relay, JSON Blueprint) use Hex version requirements, and each `manifest.toml` is the lock. Update one with `gleam deps update <package>`; no workflow or script moves a dependency (ADRs 0015 and 0020).
+- Published sibling packages (Sinal, HTTP Gun, Relay, JSON Blueprint) use Hex version requirements, and each `manifest.toml` is the lock. The PostgreSQL adapter also consumes released Hellhound from Hex. Update one with `gleam deps update <package>`; no workflow or script moves a dependency (ADRs 0015 and 0020).
 - Oracle inputs are fetched at run time into `build/oracle-inputs/` and checked against a recorded digest; the one committed exception is `test/integration/oidcc_records.hrl` (`docs/ORACLE.md`).
 
 ## Gates and tests
