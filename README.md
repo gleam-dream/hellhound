@@ -16,6 +16,7 @@ Hellhound-owned code. Hellhound is not certified.
 - Logout with separate local-custody, revocation and provider-redirect outcomes.
 - Confidential service clients for client credentials, userinfo and introspection.
 - Local RFC 9068 JWT access-token validation with audience and scope policy.
+- Standalone signed JWT assertions and configurable HTTPS credential exchange.
 - Supervised discovery and signing-key caches with restart-stable client handles.
 - Optional sealed durable custody through a conditional-record store, including
   the separate [PostgreSQL adapter](integrations/hellhound_postgres/README.md).
@@ -40,6 +41,30 @@ Commit `gleam.toml` and `manifest.toml` to retain the resolved versions. The
 integration used below.
 The optional [PostgreSQL adapter](integrations/hellhound_postgres/README.md)
 installs from a Git subdirectory.
+
+## Sign an assertion and exchange it for a token
+
+`hellhound/assertion` signs explicitly configured standard and custom JSON claims.
+Load a private key with `config.signing_key_from_jwk` or
+`config.signing_key_from_pem`, then select the signing algorithm. Claims are
+optional at this layer: your protocol profile determines issuer, audience,
+subject and lifetime. Signing reads no clock and performs no network calls.
+
+`hellhound/exchange` sends a bearer or form assertion to an explicit HTTPS
+endpoint, with an empty, form or JSON body and a caller-owned response decoder.
+Create an exchange client with `exchange.new(exchange.options())` and add
+`exchange.supervised(client)` to your application supervisor. It needs no OpenID
+discovery. Each call sends at most one request; your application decides caching,
+expiry usability and retries. Transport failures distinguish proven no-send from
+possible transmission, and provider failures expose their status without raw
+response bodies. Transport validation failures take precedence over a provider status, including oversized or incomplete error bodies. Ordinary inspection of requests, assertions and returned tokens
+omits their credential material; explicit token accessors expose it for use.
+
+The compiled [GitHub App and OAuth service recipes](consumer/src/hellhound_reference/usage/assertion_exchange.gleam)
+show distinct claim profiles, credential placement, body encodings and absolute
+or relative expiry decoders. Their [consumer tests](consumer/test/assertion_exchange_test.gleam)
+run against a local HTTPS endpoint. These examples do not establish live GitHub
+acceptance or RFC 7523/8693 conformance.
 
 ## Sign a user in, then call an API
 

@@ -338,6 +338,12 @@ fn to_http(
       )
     })
     |> list.map(fn(h) { #(string.lowercase(h.0), h.1) })
+  let headers = case
+    list.any(headers, fn(header) { header.0 == "user-agent" })
+  {
+    True -> headers
+    False -> [#("user-agent", "hellhound"), ..headers]
+  }
   Ok(
     http_request.Request(
       ..req,
@@ -345,7 +351,7 @@ fn to_http(
         Get -> http.Get
         Post -> http.Post
       },
-      headers: [#("user-agent", "hellhound"), ..headers],
+      headers:,
       body: option.unwrap(request.body, <<>>),
     ),
   )
