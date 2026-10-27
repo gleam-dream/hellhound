@@ -4,9 +4,9 @@
 [![hellhound on Hex](https://img.shields.io/hexpm/v/hellhound?label=Hex%3A%20hellhound)](https://hex.pm/packages/hellhound)
 [![Gleam](https://img.shields.io/badge/Gleam-FFAFF3?logo=gleam&logoColor=000000)](https://gleam.run/)
 
-A separate relying-party application that exercises Hellhound's public API against
-the local test provider. It supplies browser routes, application session storage
-and route protection, and holds one runnable example per usage topic.
+A separate relying-party application testing Hellhound's public API against a
+local test provider. It supplies browser routes, application session storage, route
+protection, and one runnable example per topic.
 
 | Topic                                             | Example                                                  |
 | ------------------------------------------------- | -------------------------------------------------------- |
@@ -18,8 +18,8 @@ and route protection, and holds one runnable example per usage topic.
 | Local test provider                               | `src/hellhound_reference/usage/test_provider.gleam`      |
 | Application decisions around Hellhound's evidence | `src/hellhound_reference/usage/responsibilities.gleam`   |
 
-`test/usage_test.gleam` runs every example. The README at the repository root shows
-related usage snippets, whose consistency is reviewed manually. `src/hellhound_reference/web.gleam` holds the browser routes and
+`test/usage_test.gleam` runs every example. Root README snippets are reviewed
+manually for consistency. `src/hellhound_reference/web.gleam` holds browser routes and
 `protect.gleam` the route protection; `test/hellhound_reference_test.gleam` runs the
 common login path and `browser/` holds the browser reproduction.
 
