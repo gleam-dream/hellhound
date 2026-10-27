@@ -1,5 +1,9 @@
 # Hellhound
 
+[![CI](https://github.com/gleam-dream/hellhound/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gleam-dream/hellhound/actions/workflows/ci.yml)
+[![hellhound on Hex](https://img.shields.io/hexpm/v/hellhound?label=Hex%3A%20hellhound)](https://hex.pm/packages/hellhound)
+[![Gleam](https://img.shields.io/badge/Gleam-FFAFF3?logo=gleam&logoColor=000000)](https://gleam.run/)
+
 OIDC login, OAuth 2.0 tokens and JWT access-token validation for Gleam on
 Erlang/OTP. Hellhound manages provider discovery, signing keys and token custody;
 your application owns its accounts, session cookies and permission checks.

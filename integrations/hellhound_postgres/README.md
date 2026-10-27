@@ -1,5 +1,9 @@
 # hellhound_postgres
 
+[![CI](https://github.com/gleam-dream/hellhound/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gleam-dream/hellhound/actions/workflows/ci.yml)
+[![hellhound on Hex](https://img.shields.io/hexpm/v/hellhound?label=Hex%3A%20hellhound)](https://hex.pm/packages/hellhound)
+[![Gleam](https://img.shields.io/badge/Gleam-FFAFF3?logo=gleam&logoColor=000000)](https://gleam.run/)
+
 A PostgreSQL adapter for Hellhound's public `hellhound/store` contract. It borrows a
 caller-owned Pog pool, adds no application membership rules or FFI, and keeps
 PostgreSQL out of Hellhound core. It is unpublished and not production qualified.

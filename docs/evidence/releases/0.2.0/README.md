@@ -1,5 +1,9 @@
 # Hellhound 0.2.0 release preparation evidence
 
+[![CI](https://github.com/gleam-dream/hellhound/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gleam-dream/hellhound/actions/workflows/ci.yml)
+[![hellhound on Hex](https://img.shields.io/hexpm/v/hellhound?label=Hex%3A%20hellhound)](https://hex.pm/packages/hellhound)
+[![Gleam](https://img.shields.io/badge/Gleam-FFAFF3?logo=gleam&logoColor=000000)](https://gleam.run/)
+
 The candidate was prepared on 27 October 2026 from commit
 `4c95a70f0bdbc36701533ae12d458a33fcc77487` and the release changes recorded in
 `build/release-0.2.0/release-candidate.json` inside the archive. That receipt

@@ -1,5 +1,9 @@
 # hellhound reference consumer
 
+[![CI](https://github.com/gleam-dream/hellhound/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gleam-dream/hellhound/actions/workflows/ci.yml)
+[![hellhound on Hex](https://img.shields.io/hexpm/v/hellhound?label=Hex%3A%20hellhound)](https://hex.pm/packages/hellhound)
+[![Gleam](https://img.shields.io/badge/Gleam-FFAFF3?logo=gleam&logoColor=000000)](https://gleam.run/)
+
 A separate relying-party application that exercises Hellhound's public API against
 the local test provider. It supplies browser routes, application session storage
 and route protection, and holds one runnable example per usage topic.
