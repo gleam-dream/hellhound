@@ -42,6 +42,17 @@ integration used below.
 The optional [PostgreSQL adapter](integrations/hellhound_postgres/README.md)
 installs from a Git subdirectory.
 
+### Upgrading from 0.1.0 to 0.2.0
+
+Version 0.2.0 adds standalone JWT assertion signing, PEM private-key loading and
+explicit HTTPS credential exchange. Existing exhaustive matches on
+`config.SigningKeyError` must handle the new `config.NotAPrivateSigningPem`
+variant, including callers that only load JWK keys.
+
+JWK `alg` and `kid` members must be strings when present. Explicit `null` values
+are now rejected; omit these members when no algorithm restriction or key
+identifier is intended.
+
 ## Sign an assertion and exchange it for a token
 
 `hellhound/assertion` signs explicitly configured standard and custom JSON claims.

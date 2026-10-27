@@ -1,0 +1,903 @@
+{
+  "bomFormat": "CycloneDX",
+  "specVersion": "1.6",
+  "serialNumber": "urn:uuid:95d4f7bf-64b6-4da1-bef3-8d24245d6566",
+  "version": 1,
+  "metadata": {
+    "timestamp": "2026-10-27T17:10:52.694164+00:00",
+    "component": {
+      "type": "library",
+      "bom-ref": "pkg:hex/hellhound@0.2.0",
+      "name": "hellhound",
+      "version": "0.2.0",
+      "purl": "pkg:hex/hellhound@0.2.0"
+    }
+  },
+  "components": [
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/bigi@4.1.1",
+      "name": "bigi",
+      "version": "4.1.1",
+      "purl": "pkg:hex/bigi@4.1.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "44fedf1df5c1f426a80b67c32b976d0828d66524e11bdc2dd22b78d37c883ba7"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/cowlib@2.21.0",
+      "name": "cowlib",
+      "version": "2.21.0",
+      "purl": "pkg:hex/cowlib@2.21.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0960248773762a5319b3c17285028bc76f54f58ef0f9451367401bdf67b46274"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/exception@2.1.1",
+      "name": "exception",
+      "version": "2.1.1",
+      "purl": "pkg:hex/exception@2.1.1",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "6bdea95248093599391c3b5df1835c5c6a86c353c2f99ce539b450e3432fe117"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/file_streams@1.7.0",
+      "name": "file_streams",
+      "version": "1.7.0",
+      "purl": "pkg:hex/file_streams@1.7.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "62757932b5fac14fc9d0ee69bc4694dc6ea9f0fe6e198f695711c4fcac1f7a26"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/filepath@1.1.2",
+      "name": "filepath",
+      "version": "1.1.2",
+      "purl": "pkg:hex/filepath@1.1.2",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "b06a9af0bf10e51401d64b98e4b627f1d2e48c154967da7af4d0914780a6d40a"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/gleam_crypto@1.6.0",
+      "name": "gleam_crypto",
+      "version": "1.6.0",
+      "purl": "pkg:hex/gleam_crypto@1.6.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "2de9e4ef53cf6fee049d4f765731f7178f7a11aefae00eee63bf7536b354ad3f"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/gleam_erlang@1.3.0",
+      "name": "gleam_erlang",
+      "version": "1.3.0",
+      "purl": "pkg:hex/gleam_erlang@1.3.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "1124ad3aa21143e5af0fc5cf3d9529f6db8ca03e43a55711b60b6b7b3874375c"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/gleam_http@4.4.0",
+      "name": "gleam_http",
+      "version": "4.4.0",
+      "purl": "pkg:hex/gleam_http@4.4.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "f065ce9941a7756abbaeae7f9f32a96cad29da3311a381db2d926ea8e8c156dc"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/gleam_json@3.1.0",
+      "name": "gleam_json",
+      "version": "3.1.0",
+      "purl": "pkg:hex/gleam_json@3.1.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "44fdaa8847be8fc48ca7a1c089706bd54badcc4c45b237a992eddf9f2cdb2836"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/gleam_otp@1.3.0",
+      "name": "gleam_otp",
+      "version": "1.3.0",
+      "purl": "pkg:hex/gleam_otp@1.3.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "de4ca6850842f0266ee95317a25dd6a0a0f20cdfab7c0adc2e63251d7c3c72ec"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/gleam_stdlib@1.0.5",
+      "name": "gleam_stdlib",
+      "version": "1.0.5",
+      "purl": "pkg:hex/gleam_stdlib@1.0.5",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "cee5b6c076a85b45f60c585f4316c63ec8b7127c119d5738c3958a9c4d50404e"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/gleam_time@1.11.0",
+      "name": "gleam_time",
+      "version": "1.11.0",
+      "purl": "pkg:hex/gleam_time@1.11.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "3ab789c3ed4eb9dda7283f46c3cf83a5487c9cfb790dc3ff8f8acb5bf7b7a6c1"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/gleeunit@1.11.0",
+      "name": "gleeunit",
+      "version": "1.11.0",
+      "purl": "pkg:hex/gleeunit@1.11.0",
+      "scope": "optional",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "ec31aba74256aea531edf8169931d775bbb384fed0a8a1bdc4dd9354e3e21826"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "development"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/gose@2.2.0",
+      "name": "gose",
+      "version": "2.2.0",
+      "purl": "pkg:hex/gose@2.2.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "d46667c0a6634a38f0c5d90b5f6ba9d68107f90ea0950eebc95c2adc41dda118"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/gun@2.6.0",
+      "name": "gun",
+      "version": "2.6.0",
+      "purl": "pkg:hex/gun@2.6.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "ISC"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "69bb957f4bd6c475b5714460fd65c26fc7eb85760aa64b74754de36ce5cced7d"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/http_gun@0.1.0",
+      "name": "http_gun",
+      "version": "0.1.0",
+      "purl": "pkg:hex/http_gun@0.1.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "d217888729822dcc5e68b88d6fed819674299da9e1aac1843884a7bc8b1ea98a"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/jose@1.11.13",
+      "name": "jose",
+      "version": "1.11.13",
+      "purl": "pkg:hex/jose@1.11.13",
+      "scope": "optional",
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "15d8bd0f01ab29d1771e8da1f60f9c98725b23a17f7312cdd40e8e2757bd98c7"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "development"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/kryptos@1.5.0",
+      "name": "kryptos",
+      "version": "1.5.0",
+      "purl": "pkg:hex/kryptos@1.5.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "0707a1492e8585cec8218315c69a182b43cd25e22c216cb530330c94f5d62944"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/oidcc@3.9.0",
+      "name": "oidcc",
+      "version": "3.9.0",
+      "purl": "pkg:hex/oidcc@3.9.0",
+      "scope": "optional",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "5a825092fe9b3214017a5777ba7ed871c6e3ff9532848f600f6c1fe31c5e41ce"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "development"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/simplifile@2.7.0",
+      "name": "simplifile",
+      "version": "2.7.0",
+      "purl": "pkg:hex/simplifile@2.7.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "a2727627b063e87351934c7f7f008f2d1fdb16f6de0b8c79f9e46459cfc9c164"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/sinal@0.1.0",
+      "name": "sinal",
+      "version": "0.1.0",
+      "purl": "pkg:hex/sinal@0.1.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "358d776fdfd6b0be56e6fa63bbe3fa8d5a9a05c2ddd256270e54e133eb4a71fc"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/splitter@1.3.0",
+      "name": "splitter",
+      "version": "1.3.0",
+      "purl": "pkg:hex/splitter@1.3.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "8f1485306e0d59168a39e12ed8844f9f616ec59c3c63afcfdae04dbd68690cbc"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/telemetry@1.4.2",
+      "name": "telemetry",
+      "version": "1.4.2",
+      "purl": "pkg:hex/telemetry@1.4.2",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "928f6495066506077862c0d1646609eed891a4326bee3126ba54b60af61febb1"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/telemetry_registry@0.3.2",
+      "name": "telemetry_registry",
+      "version": "0.3.2",
+      "purl": "pkg:hex/telemetry_registry@0.3.2",
+      "scope": "optional",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "e7ed191eb1d115a3034af8e1e35e4e63d5348851d556646d46ca3d1b4e16bab9"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "development"
+        }
+      ]
+    },
+    {
+      "type": "library",
+      "bom-ref": "pkg:hex/youid@1.6.0",
+      "name": "youid",
+      "version": "1.6.0",
+      "purl": "pkg:hex/youid@1.6.0",
+      "scope": "required",
+      "licenses": [
+        {
+          "license": {
+            "id": "Apache-2.0"
+          }
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-256",
+          "content": "7a3aba44b1b38bc2bdcb5474c5317aa372be58dfbc649815ee08b03526dda18d"
+        }
+      ],
+      "properties": [
+        {
+          "name": "hellhound:dependency-scope",
+          "value": "runtime"
+        }
+      ]
+    }
+  ],
+  "dependencies": [
+    {
+      "ref": "pkg:hex/hellhound@0.2.0",
+      "dependsOn": [
+        "pkg:hex/gleam_stdlib@1.0.5",
+        "pkg:hex/gleam_erlang@1.3.0",
+        "pkg:hex/gleam_otp@1.3.0",
+        "pkg:hex/gleam_json@3.1.0",
+        "pkg:hex/telemetry@1.4.2",
+        "pkg:hex/exception@2.1.1",
+        "pkg:hex/gleam_crypto@1.6.0",
+        "pkg:hex/gleam_time@1.11.0",
+        "pkg:hex/gose@2.2.0",
+        "pkg:hex/kryptos@1.5.0",
+        "pkg:hex/sinal@0.1.0",
+        "pkg:hex/http_gun@0.1.0",
+        "pkg:hex/gleam_http@4.4.0"
+      ]
+    },
+    {
+      "ref": "pkg:hex/bigi@4.1.1",
+      "dependsOn": [
+        "pkg:hex/gleam_stdlib@1.0.5"
+      ]
+    },
+    {
+      "ref": "pkg:hex/cowlib@2.21.0",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg:hex/exception@2.1.1",
+      "dependsOn": [
+        "pkg:hex/gleam_stdlib@1.0.5"
+      ]
+    },
+    {
+      "ref": "pkg:hex/file_streams@1.7.0",
+      "dependsOn": [
+        "pkg:hex/gleam_stdlib@1.0.5"
+      ]
+    },
+    {
+      "ref": "pkg:hex/filepath@1.1.2",
+      "dependsOn": [
+        "pkg:hex/gleam_stdlib@1.0.5"
+      ]
+    },
+    {
+      "ref": "pkg:hex/gleam_crypto@1.6.0",
+      "dependsOn": [
+        "pkg:hex/gleam_stdlib@1.0.5"
+      ]
+    },
+    {
+      "ref": "pkg:hex/gleam_erlang@1.3.0",
+      "dependsOn": [
+        "pkg:hex/gleam_stdlib@1.0.5"
+      ]
+    },
+    {
+      "ref": "pkg:hex/gleam_http@4.4.0",
+      "dependsOn": [
+        "pkg:hex/gleam_stdlib@1.0.5"
+      ]
+    },
+    {
+      "ref": "pkg:hex/gleam_json@3.1.0",
+      "dependsOn": [
+        "pkg:hex/gleam_stdlib@1.0.5"
+      ]
+    },
+    {
+      "ref": "pkg:hex/gleam_otp@1.3.0",
+      "dependsOn": [
+        "pkg:hex/gleam_erlang@1.3.0",
+        "pkg:hex/gleam_stdlib@1.0.5"
+      ]
+    },
+    {
+      "ref": "pkg:hex/gleam_stdlib@1.0.5",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg:hex/gleam_time@1.11.0",
+      "dependsOn": [
+        "pkg:hex/gleam_stdlib@1.0.5"
+      ]
+    },
+    {
+      "ref": "pkg:hex/gleeunit@1.11.0",
+      "dependsOn": [
+        "pkg:hex/gleam_stdlib@1.0.5"
+      ]
+    },
+    {
+      "ref": "pkg:hex/gose@2.2.0",
+      "dependsOn": [
+        "pkg:hex/gleam_json@3.1.0",
+        "pkg:hex/gleam_stdlib@1.0.5",
+        "pkg:hex/gleam_time@1.11.0",
+        "pkg:hex/kryptos@1.5.0",
+        "pkg:hex/splitter@1.3.0"
+      ]
+    },
+    {
+      "ref": "pkg:hex/gun@2.6.0",
+      "dependsOn": [
+        "pkg:hex/cowlib@2.21.0"
+      ]
+    },
+    {
+      "ref": "pkg:hex/http_gun@0.1.0",
+      "dependsOn": [
+        "pkg:hex/cowlib@2.21.0",
+        "pkg:hex/file_streams@1.7.0",
+        "pkg:hex/gleam_erlang@1.3.0",
+        "pkg:hex/gleam_http@4.4.0",
+        "pkg:hex/gleam_json@3.1.0",
+        "pkg:hex/gleam_otp@1.3.0",
+        "pkg:hex/gleam_stdlib@1.0.5",
+        "pkg:hex/gleam_time@1.11.0",
+        "pkg:hex/gun@2.6.0",
+        "pkg:hex/simplifile@2.7.0",
+        "pkg:hex/sinal@0.1.0",
+        "pkg:hex/youid@1.6.0"
+      ]
+    },
+    {
+      "ref": "pkg:hex/jose@1.11.13",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg:hex/kryptos@1.5.0",
+      "dependsOn": [
+        "pkg:hex/bigi@4.1.1",
+        "pkg:hex/gleam_stdlib@1.0.5",
+        "pkg:hex/gleam_time@1.11.0"
+      ]
+    },
+    {
+      "ref": "pkg:hex/oidcc@3.9.0",
+      "dependsOn": [
+        "pkg:hex/jose@1.11.13",
+        "pkg:hex/telemetry@1.4.2",
+        "pkg:hex/telemetry_registry@0.3.2"
+      ]
+    },
+    {
+      "ref": "pkg:hex/simplifile@2.7.0",
+      "dependsOn": [
+        "pkg:hex/filepath@1.1.2",
+        "pkg:hex/gleam_stdlib@1.0.5"
+      ]
+    },
+    {
+      "ref": "pkg:hex/sinal@0.1.0",
+      "dependsOn": [
+        "pkg:hex/gleam_erlang@1.3.0",
+        "pkg:hex/gleam_otp@1.3.0",
+        "pkg:hex/gleam_stdlib@1.0.5",
+        "pkg:hex/telemetry@1.4.2"
+      ]
+    },
+    {
+      "ref": "pkg:hex/splitter@1.3.0",
+      "dependsOn": [
+        "pkg:hex/gleam_stdlib@1.0.5"
+      ]
+    },
+    {
+      "ref": "pkg:hex/telemetry@1.4.2",
+      "dependsOn": []
+    },
+    {
+      "ref": "pkg:hex/telemetry_registry@0.3.2",
+      "dependsOn": [
+        "pkg:hex/telemetry@1.4.2"
+      ]
+    },
+    {
+      "ref": "pkg:hex/youid@1.6.0",
+      "dependsOn": [
+        "pkg:hex/gleam_crypto@1.6.0",
+        "pkg:hex/gleam_stdlib@1.0.5",
+        "pkg:hex/gleam_time@1.11.0"
+      ]
+    }
+  ],
+  "vulnerabilities": [
+    {
+      "id": "CVE-2026-43966",
+      "source": {
+        "name": "EEF CNA",
+        "url": "https://cna.erlef.org/cves/CVE-2026-43966.html"
+      },
+      "affects": [
+        {
+          "ref": "pkg:hex/cowlib@2.21.0"
+        },
+        {
+          "ref": "pkg:hex/gun@2.6.0"
+        }
+      ],
+      "analysis": {
+        "state": "not_affected",
+        "justification": "protected_by_mitigating_control",
+        "detail": "Hellhound outbound headers are validated by HTTP Gun and by Gun 2.6.0 before transmission. Neither path calls the affected structured-header encoder. The Cowlib version remains flagged for other consumers."
+      }
+    }
+  ]
+}
