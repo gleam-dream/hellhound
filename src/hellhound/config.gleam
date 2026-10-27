@@ -52,28 +52,19 @@
 //// Secrets (`Secret`, `SigningKey`, `SealingKey`) are held in closures, so
 //// `string.inspect` of a configuration prints no credential.
 
-import exception
 import gleam/bit_array
-import gleam/dict
-import gleam/dynamic.{type Dynamic}
-import gleam/dynamic/decode
-import gleam/erlang/atom
-import gleam/json
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
 import gleam/time/duration.{type Duration}
 import gleam/uri
-import gose
-import gose/jose/jwk
-import hellhound/internal/key_policy
 import hellhound/internal/redacted
 import hellhound/internal/secure
 import hellhound/internal/settings.{type Settings, Settings}
+import hellhound/internal/signing_key
+import hellhound/internal/trust
 import hellhound/store.{type Store}
-import kryptos/ec
-import kryptos/eddsa
 
 /// A Hellhound configuration. Build it with `new`, `service_client` or
 /// `resource_server` and the `with_*` setters.
@@ -96,76 +87,37 @@ pub fn secret(value: String) -> Secret {
 }
 
 /// A private signing key for `private_key_jwt`, held like `Secret`.
-pub opaque type SigningKey {
-  SigningKey(
-    reveal: fn() -> String,
-    key_id: Option(String),
-    algorithms: List(String),
-  )
-}
+pub type SigningKey =
+  signing_key.Key
 
 pub type SigningKeyError {
-  /// The text is not a JSON Web Key with private signing material.
   NotAPrivateSigningJwk
-  /// An RSA key below 2048 bits (RFC 7518 §3.3).
+  NotAPrivateSigningPem
   WeakRsaKey
-  /// The key's `use` or `key_ops` does not permit signing.
   NotForSigning
 }
 
-/// Parse a private JSON Web Key (RSA, EC P-256/384/521 or Ed25519).
+/// Admit a private JWK, including key strength, use, key_ops and alg policy.
 pub fn signing_key_from_jwk(
   json: String,
 ) -> Result(SigningKey, SigningKeyError) {
-  case jwk.from_json(json) {
-    Ok(key) ->
-      case gose.is_private_key(key), jwk_fields(json) {
-        False, _ -> Error(NotAPrivateSigningJwk)
-        True, fields -> {
-          use _ <- result.try(case key_policy.strong_enough(fields) {
-            True -> Ok(Nil)
-            False -> Error(WeakRsaKey)
-          })
-          use _ <- result.try(case key_policy.for_signing(fields) {
-            True -> Ok(Nil)
-            False -> Error(NotForSigning)
-          })
-          let algorithms = case gose.key_type(key) {
-            gose.RsaKeyType -> ["RS256", "PS256"]
-            gose.EcKeyType ->
-              case gose.ec_curve(key) {
-                Ok(ec.P256) -> ["ES256"]
-                Ok(ec.P384) -> ["ES384"]
-                Ok(ec.P521) -> ["ES512"]
-                _ -> []
-              }
-            gose.OkpKeyType ->
-              case gose.eddsa_curve(key) {
-                Ok(eddsa.Ed25519) -> ["EdDSA"]
-                _ -> []
-              }
-            gose.OctKeyType -> []
-          }
-          // A JWK `alg` member restricts the key to that algorithm.
-          let algorithms = case gose.alg(key) {
-            Ok(alg) ->
-              list.filter(algorithms, fn(a) { a == jwk.alg_to_string(alg) })
-            Error(Nil) -> algorithms
-          }
-          Ok(SigningKey(
-            reveal: fn() { json },
-            key_id: option.from_result(gose.kid(key)),
-            algorithms:,
-          ))
-        }
-      }
-    Error(_) -> Error(NotAPrivateSigningJwk)
-  }
+  signing_key.from_jwk(json) |> result.map_error(signing_key_error)
 }
 
-fn jwk_fields(text: String) -> dict.Dict(String, Dynamic) {
-  json.parse(text, decode.dict(decode.string, decode.dynamic))
-  |> result.unwrap(dict.new())
+/// Admit a supported private PEM key through the same key policy as JWK input.
+pub fn signing_key_from_pem(
+  pem: String,
+) -> Result(SigningKey, SigningKeyError) {
+  signing_key.from_pem(pem) |> result.map_error(signing_key_error)
+}
+
+fn signing_key_error(error: signing_key.KeyError) -> SigningKeyError {
+  case error {
+    signing_key.NotAPrivateSigningJwk -> NotAPrivateSigningJwk
+    signing_key.NotAPrivateSigningPem -> NotAPrivateSigningPem
+    signing_key.WeakRsaKey -> WeakRsaKey
+    signing_key.NotForSigning -> NotForSigning
+  }
 }
 
 /// The key that seals records in a durable store (`with_sealing_key`): 32
@@ -365,9 +317,9 @@ fn to_authentication(
       settings.SharedSecret("client_secret_jwt", redacted.new(s.reveal()))
     PrivateKeyJwt(key) ->
       settings.PrivateKey(
-        jwk: redacted.new(key.reveal()),
-        key_id: key.key_id,
-        algorithms: key.algorithms,
+        jwk: signing_key.credential(key),
+        key_id: signing_key.key_id(key),
+        algorithms: signing_key.algorithms(key),
       )
   }
 }
@@ -422,7 +374,7 @@ pub fn with_trust(config: Config, trust: Trust) -> Config {
   Settings(..config, trust: case trust {
     SystemTrust -> settings.SystemTrust
     TrustAnchorsPem(pem) ->
-      case pem_certificates(pem) {
+      case trust.pem_certificates(pem) {
         Ok(ders) -> settings.Anchors(ders)
         Error(Nil) -> settings.UnreadableAnchors
       }
@@ -838,45 +790,3 @@ fn algorithm_name(algorithm: SigningAlgorithm) -> String {
     EdDsa -> "EdDSA"
   }
 }
-
-/// DER certificates from PEM text. Every block must be an X.509
-/// certificate that decodes; any other block (a private key, a corrupt
-/// certificate) rejects the whole input, as does an input with none.
-fn pem_certificates(pem: String) -> Result(List(BitArray), Nil) {
-  let entry = {
-    use kind <- decode.field(0, atom.decoder())
-    use der <- decode.field(1, decode.bit_array)
-    decode.success(#(atom.to_string(kind), der))
-  }
-  use entries <- result.try(
-    exception.rescue(fn() { pem_decode(<<pem:utf8>>) })
-    |> result.replace_error(Nil),
-  )
-  use entries <- result.try(
-    decode.run(entries, decode.list(entry)) |> result.replace_error(Nil),
-  )
-  use ders <- result.try(
-    list.try_map(entries, fn(entry) {
-      case entry {
-        #("Certificate", der) ->
-          case
-            exception.rescue(fn() { pkix_decode_cert(der, atom.create("otp")) })
-          {
-            Ok(_) -> Ok(der)
-            Error(_) -> Error(Nil)
-          }
-        _ -> Error(Nil)
-      }
-    }),
-  )
-  case ders {
-    [] -> Error(Nil)
-    _ -> Ok(ders)
-  }
-}
-
-@external(erlang, "public_key", "pem_decode")
-fn pem_decode(pem: BitArray) -> Dynamic
-
-@external(erlang, "public_key", "pkix_decode_cert")
-fn pkix_decode_cert(der: BitArray, form: atom.Atom) -> Dynamic

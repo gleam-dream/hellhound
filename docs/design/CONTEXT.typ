@@ -30,4 +30,7 @@
   (slug: "term-oracle", title: [Oracle], body: [A pinned independent implementation, token corpus or conformance suite whose behavior bounds a named Hellhound contract. It is never a runtime dependency and confers no certification.]),
   (slug: "term-evidence-receipt", title: [Evidence receipt], body: [A retained raw output of one check run with its exact revisions. It bounds the claim it supports and neither certifies a release nor qualifies a later dependency resolution.]),
   (slug: "term-tombstone", title: [Tombstone], body: [A bounded terminal record preserving consumption or termination evidence after secret material is removed. It prevents replay and late installation recovery within its retention horizon.]),
+  (slug: "term-signed-assertion", title: [Signed assertion], body: [An opaque signed JWT credential containing caller-configured claims. Its signature does not make its claims Hellhound-verified identity or access claims.]),
+  (slug: "term-exchange-client", title: [Exchange client], body: [An immutable handle binding explicit transport policy to an application-supervised HTTP pool, independently of OpenID discovery and user custody.]),
+  (slug: "term-exchange-token", title: [Exchange token], body: [An opaque provider credential admitted by a caller-owned response decoder, with optional observed expiry. It carries no checked identity or business permission authority.]),
 )

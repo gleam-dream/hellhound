@@ -1,0 +1,23 @@
+#!/bin/sh
+# Fetch the immutable public RFC7520 input; a cached file must pass its digest.
+set -eu
+ROOT=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+DIR="$ROOT/build/oracle-inputs"
+FILE="$DIR/rfc7520-rs256.json"
+DIGEST=5836d16f4fa62fa311b047002e0636eba2789a6f558a26d49acfaeeb26fa470c
+verify() {
+  actual=$(python3 -c 'import hashlib, pathlib, sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$1")
+  [ "$actual" = "$DIGEST" ] || { echo 'RFC7520 oracle input digest mismatch' >&2; return 1; }
+}
+if [ -f "$FILE" ]; then
+  verify "$FILE"
+  exit 0
+fi
+mkdir -p "$DIR"
+TEMP=$(mktemp "$DIR/rfc7520.XXXXXX")
+trap 'rm -f "$TEMP"' EXIT HUP INT TERM
+curl --fail --location --silent --show-error --connect-timeout 10 --max-time 60 \
+  'https://raw.githubusercontent.com/ietf-jose/cookbook/13692b68bfc18b99557a5b1ed311fd5077bfff04/jws/4_1.rsa_v15_signature.json' \
+  --output "$TEMP"
+verify "$TEMP"
+mv "$TEMP" "$FILE"
