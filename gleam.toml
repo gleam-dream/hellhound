@@ -1,5 +1,5 @@
 name = "hellhound"
-version = "0.2.0"
+version = "0.2.1"
 target = "erlang"
 gleam = ">= 1.18.0"
 licences = ["Apache-2.0"]
