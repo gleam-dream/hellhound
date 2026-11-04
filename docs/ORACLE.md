@@ -103,8 +103,10 @@ policy confers certification.
 - The advisory-query control found oidcc `GHSA-mj35-2rgf-cv8p` but missed
   `GHSA-533g-4vf3-xwrj`, so an empty advisory query is weak evidence. The oidcc
   tag signature was not verified locally because its key was absent.
-- A wrong-key token without a kid does not refetch, `allowed_hosts` does not restrict
-  ports, and certificate revocation checking is not claimed.
+- A token without a kid whose signature fails against a compatible cached key
+  does not refetch; a token with no compatible cached key is an unknown-key
+  event (rate-limited refetch). `allowed_hosts` does not restrict ports, and
+  certificate revocation checking is not claimed.
 
 ## Run a comparison
 
