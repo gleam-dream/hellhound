@@ -11,6 +11,7 @@ import gleam/result
 import hellhound
 import hellhound/config
 import hellhound/internal/secure
+import hellhound/internal/settings
 import hellhound/internal/transport
 import hellhound/testing
 import oidcc_transport
@@ -66,6 +67,15 @@ pub fn clock_set(clock: Clock, value: Int) -> Nil
 
 @external(erlang, "hellhound_test_support_ffi", "clock_read")
 pub fn clock_read(clock: Clock) -> Int
+
+/// The configuration reading the key-refetch cooldown's monotonic
+/// milliseconds from a test clock.
+pub fn with_monotonic_clock(
+  config: config.Config,
+  clock: Clock,
+) -> config.Config {
+  settings.Settings(..config, monotonic_clock: fn() { clock_read(clock) })
+}
 
 pub type Provider
 

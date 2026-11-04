@@ -301,6 +301,7 @@ fn base(
     sealing_key: None,
     previous_sealing_keys: [],
     clock: secure.now_seconds,
+    monotonic_clock: secure.monotonic_ms,
   )
 }
 

@@ -62,6 +62,7 @@ worker_loss_releases_waiters_and_retains_snapshot_test() ->
             stop(Worker, kill),
             ?assertMatch({ok, _}, result(Caller, 500)),
             ?assertMatch({ok, _}, hellhound@resource:verify(Validator, Token)),
+            elapse_cooldown(),
             Next = refresh(Handle, <<"next-worker">>),
             Fresh = next_worker(),
             Fresh ! release,
@@ -92,7 +93,8 @@ with_configured_client(Configure, Fun) ->
     {ok, _} = application:ensure_all_started(hellhound),
     {ok, Test} = hellhound@testing:start_provider(hellhound@testing:provider_options()),
     try
-        {ok, Client} = hellhound:new(Configure(hellhound@testing:config(Test, <<"https://app.test/callback">>))),
+        {ok, Client} = hellhound:new(Configure(cooldown_clock(
+            hellhound@testing:config(Test, <<"https://app.test/callback">>)))),
         Id = make_ref(),
         ok = telemetry:attach(Id, [hellhound, http, request], fun ?MODULE:observe/4,
                               {watch, self(), Id}),
@@ -113,6 +115,17 @@ with_configured_client(Configure, Fun) ->
             stop(Parent, shutdown)
         end
     after hellhound@testing:stop_provider(Test) end.
+
+%% The key-refetch cooldown (30 s) reads a test clock; a lifecycle test that
+%% needs a second unknown-key fetch advances it explicitly.
+cooldown_clock(Config) ->
+    Clock = hellhound_test_support_ffi:clock_new(0),
+    put(cooldown_clock, Clock),
+    hellhound_test_support:with_monotonic_clock(Config, Clock).
+elapse_cooldown() ->
+    Clock = get(cooldown_clock),
+    hellhound_test_support_ffi:clock_set(Clock, hellhound_test_support_ffi:clock_read(Clock)
+        + 30000).
 
 await_ready(Handle, Deadline) ->
     case hellhound@internal@native@provider:snapshot_of(Handle) of
@@ -183,10 +196,10 @@ complete(Parent, Worker) ->
     down(Worker, 5000),
     [down(Pid, 5000) || {process, Pid} <- Monitors].
 
-refresh(Handle, Kid) ->
+refresh(Handle, _Label) ->
     Parent = self(),
     Ref = make_ref(),
-    spawn(fun() -> Parent ! {Ref, hellhound@internal@native@provider:refresh_keys(Handle, {some, Kid})} end),
+    spawn(fun() -> Parent ! {Ref, hellhound@internal@native@provider:refresh_keys(Handle)} end),
     Ref.
 result(Ref) -> result(Ref, 6000).
 result(Ref, Timeout) ->
@@ -255,8 +268,8 @@ bookkeeping() ->
             down(Worker, 1000)
         end),
         Start = erlang:monotonic_time(microsecond),
-        [begin {ok, _} = hellhound@internal@native@provider:refresh_keys(Handle, {some, integer_to_binary(N)}) end
-         || N <- lists:seq(1, 100)],
+        [begin {ok, _} = hellhound@internal@native@provider:refresh_keys(Handle) end
+         || _ <- lists:seq(1, 100)],
         io:format("refresh_count=100 total_us=~p after_burst_cache=~w~n",
             [erlang:monotonic_time(microsecond) - Start,
              process_info(cache(Parent), [monitors, monitored_by, message_queue_len])])
@@ -365,6 +378,7 @@ obsolete_completion_cannot_settle_new_refresh_test() ->
             try erlang:trace(Guardian, false, [send]) catch _:_ -> ok end,
             hellhound@testing:rotate_signing_key(Test),
             hellhound@testing:rotate_signing_key(Test),
+            elapse_cooldown(),
             with_barrier(fun(_) ->
                 Next = refresh(Handle, <<"second">>),
                 NextWorker = blocked(),
@@ -462,6 +476,7 @@ obsolete_down_cannot_release_new_refresh_test() ->
                 erlang:trace(Cache, false, ['receive']),
                 hellhound@testing:rotate_signing_key(Test),
                 hellhound@testing:rotate_signing_key(Test),
+                elapse_cooldown(),
                 with_barrier(fun(_) ->
                     Next = refresh(Handle, <<"next-down">>),
                     Worker = blocked(),
@@ -493,8 +508,7 @@ completed_fetch_bookkeeping_drains_test() ->
             down(Guardian, 1000),
             ?assertEqual({monitors, []}, process_info(Cache, monitors))
         end),
-        [begin {ok, _} = hellhound@internal@native@provider:refresh_keys(Handle,
-                       {some, integer_to_binary(N)}) end || N <- lists:seq(1, 25)],
+        [begin {ok, _} = hellhound@internal@native@provider:refresh_keys(Handle) end || _ <- lists:seq(1, 25)],
         ?assertEqual({monitors, []}, process_info(cache(Parent), monitors)),
         ?assertEqual({message_queue_len, 0}, process_info(cache(Parent), message_queue_len))
     end).
@@ -645,7 +659,8 @@ await_child_join(Pool, Parent, Deadline) ->
 manual_cache_restart_cannot_restore_startup_key_test() ->
     {ok, _} = application:ensure_all_started(hellhound),
     {ok, Test} = hellhound@testing:start_provider(hellhound@testing:provider_options()),
-    {ok, Client} = hellhound:new(hellhound@testing:config(Test, <<"https://app.test/callback">>)),
+    {ok, Client} = hellhound:new(cooldown_clock(
+        hellhound@testing:config(Test, <<"https://app.test/callback">>))),
     try
         {links, Before} = process_info(self(), links),
         {ok, nil} = hellhound:start(Client),
@@ -674,6 +689,7 @@ manual_cache_restart_cannot_restore_startup_key_test() ->
         ?assertMatch({ok, _}, hellhound@resource:verify(Validator, Current)),
         hellhound@testing:rotate_signing_key(Test),
         hellhound@testing:rotate_signing_key(Test),
+        elapse_cooldown(),
         Newest = token(Test),
         ?assertMatch({ok, _}, hellhound@resource:verify(Validator, Newest)),
         ?assertEqual({error, unknown_signing_key}, hellhound@resource:verify(Validator, Current)),

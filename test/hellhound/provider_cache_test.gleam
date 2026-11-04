@@ -3,6 +3,7 @@
 
 import gleam/erlang/process
 import hellhound/internal/native/provider
+import hellhound/internal/secure
 import hellhound/internal/transport
 import hellhound/testing
 
@@ -29,6 +30,7 @@ pub fn start_for_lifecycle(
       testing.issuer(fixture),
       lifecycle_policy(fixture),
       fn(_) { True },
+      secure.monotonic_ms,
     )
   #(started.pid, provider.Provider(started.data, 5000))
 }

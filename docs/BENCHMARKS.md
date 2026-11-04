@@ -90,7 +90,10 @@ The [retained source](../test/hellhound_fetch_ownership_test.erl) creates its ow
 local HTTPS test provider and stops each client fixture. `benchmark/0` warms
 100 validations per client, measures 3,000 per client for one and four clients,
 reports throughput and latency percentiles, and measures 100 sequential key
-refreshes. `snapshot_benchmark/0` warms 1,000 reads per cache and measures 20,000
+refresh requests. Since the unknown-key cooldown, only the first of those
+requests fetches keys, so the retained 100-refresh row above measures the
+earlier per-kid policy and is not comparable with new samples.
+`snapshot_benchmark/0` warms 1,000 reads per cache and measures 20,000
 per cache for one and four caches.
 
 These commands produce new samples for the current checkout. They do not recreate

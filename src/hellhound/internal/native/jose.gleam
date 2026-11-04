@@ -290,14 +290,20 @@ fn verify_signed(
       result.is_ok(jwt.verifier(alg, keys: [key], options:))
     })
   // A token naming a kid is checked against that key, or against keys
-  // without a kid; never against keys with a different kid.
-  let candidates = case header.kid {
+  // without a kid; never against keys with a different kid. A named kid
+  // that no key carries stays an unknown key even when kid-less keys exist,
+  // so a rotation can request fresh keys instead of failing as a bad
+  // signature against them.
+  let #(candidates, unmatched_kid) = case header.kid {
     Some(kid) ->
       case list.filter(compatible, fn(key) { gose.kid(key) == Ok(kid) }) {
-        [] -> list.filter(compatible, fn(key) { gose.kid(key) == Error(Nil) })
-        matching -> matching
+        [] -> #(
+          list.filter(compatible, fn(key) { gose.kid(key) == Error(Nil) }),
+          True,
+        )
+        matching -> #(matching, False)
       }
-    None -> compatible
+    None -> #(compatible, False)
   }
   case candidates {
     [] -> reject("unknown_key")
@@ -308,7 +314,12 @@ fn verify_signed(
       )
       use verified <- result.try(
         jwt.verify_and_validate(verifier, token:, now: expect.now)
-        |> result.map_error(rejection),
+        |> result.map_error(fn(error) {
+          case error, unmatched_kid {
+            jwt.InvalidSignature, True -> Rejection("unknown_key", None)
+            _, _ -> rejection(error)
+          }
+        }),
       )
       // gose applied the tolerance to `exp` as well; expiry gets none.
       case jwt.decode(verified, decode.at(["exp"], seconds())) {
@@ -466,13 +477,5 @@ fn signing_alg(name: String) -> Result(gose.SigningAlg, Nil) {
   case jwk.alg_from_string(name) {
     Ok(gose.SigningAlg(alg)) -> Ok(alg)
     _ -> Error(Nil)
-  }
-}
-
-/// The `kid` of a compact JWS, if any (used to request a key refresh).
-pub fn token_kid(token: String) -> Option(String) {
-  case protected_header(token) {
-    Ok(header) -> header.kid
-    Error(_) -> None
   }
 }

@@ -2,7 +2,8 @@
 ////
 //// A `Validator` checks a bearer token against the issuer's published keys,
 //// using the started Hellhound client's key cache (an unknown `kid` refreshes
-//// the keys once, throttled), so validation sends no request per token:
+//// the keys at most once per cooldown, whatever the `kid`), so validation
+//// sends no request per token:
 ////
 //// ```gleam
 //// let assert Ok(client) = hellhound.new(config.resource_server(issuer:))

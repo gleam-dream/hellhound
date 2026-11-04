@@ -3,8 +3,11 @@
 //// Each cache incarnation discovers metadata and the JWKS through Hellhound's
 //// transport. The actor then holds them and reloads both on a timer
 //// derived from `cache-control` (bounded), and refreshes keys on demand for
-//// an unknown `kid`, at most once per second. A failed reload keeps the
-//// previous values. Unusable JWKs are skipped (RFC 7517 §5).
+//// an unknown `kid`. A token's `kid` is unauthenticated, so on-demand
+//// refreshes are bounded by time alone: at most one starts per cooldown,
+//// however many distinct identifiers arrive, and concurrent callers share
+//// it. A failed reload keeps the previous values. Unusable JWKs are skipped
+//// (RFC 7517 §5).
 ////
 //// Each asynchronous fetch belongs to one cache incarnation. Its guardian
 //// terminates the worker on owner loss, including while a telemetry observer
@@ -16,7 +19,6 @@ import gleam/bit_array
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
-import gleam/erlang/atom
 import gleam/erlang/process.{type Subject}
 import gleam/int
 import gleam/json
@@ -332,7 +334,7 @@ fn metadata_decoder() -> decode.Decoder(#(Metadata, String)) {
 pub opaque type Message {
   Get(reply: Subject(Option(Snapshot)))
   FirstDiscovery(reply: Subject(Result(Metadata, Failure)))
-  RefreshKeys(kid: Option(String), reply: Subject(Option(Snapshot)))
+  RefreshKeys(reply: Subject(Option(Snapshot)))
   Discover
   Reload
   KeysLoaded(process.Pid, Result(JwkSet, Failure))
@@ -366,8 +368,10 @@ type State {
     initial: InitialDiscovery,
     /// Delay before the next background discovery attempt.
     backoff_ms: Int,
-    last_key_refresh: Int,
-    attempted_kids: List(String),
+    /// Monotonic milliseconds when the last unknown-key refresh started.
+    last_key_refresh: Option(Int),
+    /// Monotonic milliseconds; a test seam.
+    now: fn() -> Int,
     fetch: Fetch,
   )
 }
@@ -376,7 +380,12 @@ pub type Provider {
   Provider(subject: Subject(Message), timeout: Int)
 }
 
-const key_refresh_interval_ms = 1000
+/// Minimum interval between unknown-key refreshes of one cache incarnation.
+/// The design's defaults table owns this value.
+const key_refresh_cooldown_ms = 30_000
+
+/// Delay before retrying a reload that found another fetch in flight.
+const reload_retry_ms = 1000
 
 const first_backoff_ms = 1000
 
@@ -391,6 +400,7 @@ pub fn start(
   issuer: String,
   policy: transport.Policy,
   accept: fn(Metadata) -> Bool,
+  now: fn() -> Int,
 ) -> actor.StartResult(Subject(Message)) {
   actor.new_with_initialiser(1000, fn(named) {
     // Timers and fetch results belong to this incarnation, never its name.
@@ -404,8 +414,8 @@ pub fn start(
       discovered: None,
       initial: Pending(None),
       backoff_ms: first_backoff_ms,
-      last_key_refresh: monotonic_ms(),
-      attempted_kids: [],
+      last_key_refresh: None,
+      now:,
       fetch: Idle,
     ))
     |> actor.selecting(
@@ -528,7 +538,7 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
           }
         }
       }
-    RefreshKeys(kid, reply) ->
+    RefreshKeys(reply) ->
       case state.fetch, state.discovered {
         _, None -> {
           process.send(reply, None)
@@ -540,19 +550,12 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
             State(..state, fetch: FetchingKeys(worker, [reply, ..waiters])),
           )
         _, Some(discovered) -> {
-          let now = monotonic_ms()
-          // At most one refresh per second, except that each new kid may
-          // trigger one immediate refresh (bounded list of recent kids).
-          let new_kid = case kid {
-            Some(k) -> !list.contains(state.attempted_kids, k)
-            None -> False
+          let now = state.now()
+          // The kid is attacker-chosen, so only elapsed time admits a fetch.
+          let allowed = case state.last_key_refresh {
+            None -> True
+            Some(last) -> now - last >= key_refresh_cooldown_ms
           }
-          let attempted_kids = case kid {
-            Some(k) if new_kid -> list.take([k, ..state.attempted_kids], 64)
-            _ -> state.attempted_kids
-          }
-          let allowed =
-            new_kid || now - state.last_key_refresh >= key_refresh_interval_ms
           case allowed, state.fetch {
             True, Idle -> {
               let uri = discovered.jwks_uri
@@ -566,16 +569,15 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
               actor.continue(
                 State(
                   ..state,
-                  last_key_refresh: now,
-                  attempted_kids:,
+                  last_key_refresh: Some(now),
                   fetch: FetchingKeys(worker, [reply]),
                 ),
               )
             }
-            // Throttled, or a reload is already fetching fresh keys.
+            // Within the cooldown, or a reload is already fetching keys.
             _, _ -> {
               process.send(reply, snapshot(state))
-              actor.continue(State(..state, attempted_kids:))
+              actor.continue(state)
             }
           }
         }
@@ -614,7 +616,7 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
         }
         // A fetch is in flight; try again shortly.
         _ -> {
-          process.send_after(state.self, key_refresh_interval_ms, Reload)
+          process.send_after(state.self, reload_retry_ms, Reload)
           actor.continue(state)
         }
       }
@@ -676,11 +678,10 @@ pub fn snapshot_of(provider: Provider) -> Result(Snapshot, Failure) {
   }
 }
 
-pub fn refresh_keys(
-  provider: Provider,
-  kid: Option(String),
-) -> Result(Snapshot, Failure) {
-  case call.call(provider.subject, provider.timeout, RefreshKeys(kid, _)) {
+/// Ask for fresh keys after an unknown key. Within the cooldown this
+/// answers the cached snapshot without fetching.
+pub fn refresh_keys(provider: Provider) -> Result(Snapshot, Failure) {
+  case call.call(provider.subject, provider.timeout, RefreshKeys) {
     Ok(Some(snapshot)) -> Ok(snapshot)
     _ -> Error(protocol.NotReady)
   }
@@ -689,11 +690,4 @@ pub fn refresh_keys(
 /// The same provider with calls bounded by `timeout` milliseconds.
 pub fn within(provider: Provider, timeout: Int) -> Provider {
   Provider(..provider, timeout: int.max(1, int.min(provider.timeout, timeout)))
-}
-
-@external(erlang, "erlang", "monotonic_time")
-fn monotonic_time(unit: atom.Atom) -> Int
-
-fn monotonic_ms() -> Int {
-  monotonic_time(atom.create("millisecond"))
 }
