@@ -91,6 +91,9 @@ pub type Settings {
     previous_sealing_keys: List(Redacted(BitArray)),
     /// Unix time in seconds. A test seam: production uses the system clock.
     clock: fn() -> Int,
+    /// Monotonic milliseconds for the unknown-key refetch cooldown. A test
+    /// seam: production uses the system monotonic clock.
+    monotonic_clock: fn() -> Int,
   )
 }
 

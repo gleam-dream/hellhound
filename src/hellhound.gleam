@@ -359,7 +359,13 @@ fn start_tree(
     |> supervisor.add(transport.pool_child(client.http, names.pool))
     |> supervisor.add(
       supervision.worker(fn() {
-        provider.start(names.provider, settings.issuer, client.http, accept)
+        provider.start(
+          names.provider,
+          settings.issuer,
+          client.http,
+          accept,
+          settings.monotonic_clock,
+        )
       }),
     )
   let builder =

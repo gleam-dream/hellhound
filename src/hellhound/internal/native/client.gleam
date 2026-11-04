@@ -324,7 +324,7 @@ fn token_response(
   use id_token <- result.try(case raw.id_token {
     None -> Ok(None)
     Some(token) ->
-      verify_with_refresh(client, snapshot, token, fn(keys) {
+      verify_with_refresh(client, snapshot, fn(keys) {
         jose.verify_id_token(
           token,
           keys,
@@ -364,7 +364,6 @@ fn expectations(
 fn verify_with_refresh(
   client: Client,
   snapshot: provider.Snapshot,
-  token: String,
   verify: fn(_) -> Result(Dynamic, jose.Rejection),
 ) -> Result(Dynamic, Failure) {
   let rejected = fn(r: jose.Rejection) {
@@ -373,7 +372,7 @@ fn verify_with_refresh(
   case verify(snapshot.keys) {
     Ok(claims) -> Ok(claims)
     Error(jose.Rejection(reason: "unknown_key", ..)) ->
-      case provider.refresh_keys(client.provider, jose.token_kid(token)) {
+      case provider.refresh_keys(client.provider) {
         Ok(refreshed) -> verify(refreshed.keys) |> result.map_error(rejected)
         Error(_) ->
           Error(protocol.IdTokenInvalid(reason: "unknown_key", claim: None))
@@ -476,7 +475,7 @@ pub fn userinfo(
           bit_array.to_string(r.body)
           |> result.replace_error(protocol.Malformed)
           |> result.try(fn(token) {
-            verify_with_refresh(client, snapshot, token, fn(keys) {
+            verify_with_refresh(client, snapshot, fn(keys) {
               jose.verify_userinfo(
                 token,
                 keys,
@@ -604,7 +603,7 @@ pub fn verify_access_token(
   case jose.verify_access_token(token, snapshot.keys, expect) {
     Ok(claims) -> Ok(claims)
     Error(jose.Rejection(reason: "unknown_key", ..)) ->
-      case provider.refresh_keys(client.provider, jose.token_kid(token)) {
+      case provider.refresh_keys(client.provider) {
         Ok(refreshed) ->
           jose.verify_access_token(token, refreshed.keys, expect)
           |> result.map_error(Ok)
