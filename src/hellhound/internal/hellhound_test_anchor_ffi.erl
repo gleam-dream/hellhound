@@ -209,25 +209,30 @@ is_our_root_safe(Der, Cert, Key) ->
     catch _:_ -> false
     end.
 
-%% The key signs the certificate, and the certificate is a self-signed root
-%% with exactly the loopback constraints this module mints. The public point
-%% is derived from the private scalar, which is what signs leaves; the point
-%% stored beside it in the key file must agree.
-is_our_root(Der, #'OTPCertificate'{tbsCertificate = Tbs},
+%% The key signs the certificate, and the certificate has exactly the profile
+%% `mint_root` gives: version 3, ECDSA with SHA-256 on P-256, self-issued, at
+%% most ?ROOT_SECONDS (plus the backdate) of validity, and exactly the four
+%% extensions it writes, each with the same criticality and value. The public
+%% point is derived from the private scalar, which is what signs leaves; the
+%% point stored beside it in the key file must agree.
+is_our_root(Der, #'OTPCertificate'{tbsCertificate = Tbs, signatureAlgorithm = Outer},
             #'ECPrivateKey'{publicKey = Stored} = Key) ->
-    #'OTPTBSCertificate'{subjectPublicKeyInfo = Spki, extensions = Exts,
-                         issuer = Issuer, subject = Subject} = Tbs,
+    #'OTPTBSCertificate'{version = Version, signature = Inner,
+                         subjectPublicKeyInfo = Spki, extensions = Exts,
+                         issuer = Issuer, subject = Subject,
+                         validity = #'Validity'{notBefore = From, notAfter = To}} = Tbs,
     Point = derived_point(Key),
-    case Point =:= Stored andalso Spki of
-        #'OTPSubjectPublicKeyInfo'{subjectPublicKey = #'ECPoint'{point = Point}} ->
-            is_list(Exts)
-                andalso Issuer =:= Subject
-                andalso public_key:pkix_verify(Der, {#'ECPoint'{point = Point},
-                                                     {namedCurve, ?secp256r1}})
-                andalso lists:member(name_constraints(), Exts)
-                andalso lists:member(basic_constraints(), Exts);
-        _ -> false
-    end.
+    Point =:= Stored
+        andalso Spki =:= spki(Point)
+        andalso Version =:= v3
+        andalso Inner =:= signature()
+        andalso Outer =:= signature()
+        andalso Issuer =:= Subject
+        andalso is_list(Exts)
+        andalso lists:sort(Exts) =:= lists:sort(root_extensions(Point))
+        andalso seconds(To) - seconds(From) =< ?ROOT_SECONDS + ?BACKDATE
+        andalso public_key:pkix_verify(Der, {#'ECPoint'{point = Point},
+                                             {namedCurve, ?secp256r1}}).
 
 derived_point(#'ECPrivateKey'{privateKey = Scalar}) ->
     try crypto:generate_key(ecdh, secp256r1, Scalar) of
@@ -290,14 +295,18 @@ mint_root() ->
                                     notAfter = time(Now + ?ROOT_SECONDS)},
              subject = Subject,
              subjectPublicKeyInfo = spki(Point),
-             extensions =
-                 [basic_constraints(),
-                  #'Extension'{extnID = ?'id-ce-keyUsage', critical = true,
-                               extnValue = [keyCertSign, cRLSign]},
-                  name_constraints(),
-                  #'Extension'{extnID = ?'id-ce-subjectKeyIdentifier', critical = false,
-                               extnValue = key_id(Point)}]},
+             extensions = root_extensions(Point)},
     {public_key:pkix_sign(Tbs, Key), Key}.
+
+%% The whole extension list of a root: what `mint_root` writes and what
+%% loading requires, no more and no less.
+root_extensions(Point) ->
+    [basic_constraints(),
+     #'Extension'{extnID = ?'id-ce-keyUsage', critical = true,
+                  extnValue = [keyCertSign, cRLSign]},
+     name_constraints(),
+     #'Extension'{extnID = ?'id-ce-subjectKeyIdentifier', critical = false,
+                  extnValue = key_id(Point)}].
 
 basic_constraints() ->
     #'Extension'{extnID = ?'id-ce-basicConstraints', critical = true,

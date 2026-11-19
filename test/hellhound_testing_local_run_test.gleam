@@ -6,6 +6,7 @@ import gleam/erlang/process
 import gleam/http/request
 import gleam/int
 import gleam/list
+import gleam/result
 import gleam/string
 import gleeunit/should
 import hellhound
@@ -152,6 +153,24 @@ pub fn a_root_without_extensions_is_a_mismatch_not_a_crash_test() -> Nil {
   |> should.equal(
     Error(testing.TrustAnchorFailed(directory, testing.AnchorMismatch)),
   )
+}
+
+pub fn a_root_outside_the_minted_profile_is_a_mismatch_test() -> Nil {
+  [
+    "digital_signature_usage", "non_critical_key_usage", "no_key_usage",
+    "non_critical_name_constraints", "wider_name_constraints", "no_path_length",
+    "extra_extension", "duplicate_extension", "long_validity", "sha384",
+    "version_one",
+  ]
+  |> list.each(fn(change) {
+    let directory = created_anchor()
+    resign(directory, change)
+    #(change, start_anchored(directory) |> result.map(fn(_) { Nil }))
+    |> should.equal(#(
+      change,
+      Error(testing.TrustAnchorFailed(directory, testing.AnchorMismatch)),
+    ))
+  })
 }
 
 pub fn an_incomplete_anchor_is_an_error_test() -> Nil {

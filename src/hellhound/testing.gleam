@@ -441,8 +441,10 @@ pub type TrustAnchorError {
   AnchorCorrupt(path: String)
   /// One of the two files is missing.
   AnchorIncomplete(missing: String)
-  /// The key does not sign the certificate, or the certificate is not a
-  /// self-signed root carrying exactly the loopback constraints Hellhound mints.
+  /// The key's private scalar does not match the root, or the root is not
+  /// exactly what Hellhound mints: version 3, ECDSA P-256 with SHA-256,
+  /// self-issued, at most 90 days, and only its basic constraints, key usage,
+  /// loopback name constraints and key identifier, each as minted.
   AnchorMismatch
   /// The root is outside its validity period.
   AnchorExpired
