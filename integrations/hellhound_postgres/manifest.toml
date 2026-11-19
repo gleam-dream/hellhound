@@ -48,6 +48,6 @@ gleam_stdlib = { version = ">= 1.0.0 and < 2.0.0" }
 gleam_time = { version = ">= 1.11.0 and < 2.0.0" }
 gleeunit = { version = ">= 1.0.0 and < 2.0.0" }
 hellhound = { version = ">= 0.1.0 and < 0.3.0" }
-http_gun = { version = ">= 0.1.0 and < 0.2.0" }
+http_gun = { version = ">= 0.1.0 and < 0.3.0" }
 pog = { version = ">= 4.1.0 and < 4.2.0" }
 sinal = { version = ">= 0.1.0 and < 0.2.0" }
