@@ -10,6 +10,8 @@
 
 -define(CERT_FILE, <<"hellhound-root.pem">>).
 -define(KEY_FILE, <<"hellhound-root-key.pem">>).
+-define(LOCK_FILE, <<"hellhound-root.lock">>).
+-define(LOCK_WAIT_MS, 5000).
 -define(ROOT_SECONDS, 90 * 86400).
 -define(LEAF_SECONDS, 30 * 86400).
 -define(BACKDATE, 3600).
@@ -19,41 +21,78 @@ certificate_file(Dir) -> filename:join(Dir, ?CERT_FILE).
 key_file(Dir) -> filename:join(Dir, ?KEY_FILE).
 
 %% {ok, {RootDer, RootKey}} | {error, AnchorError}
+%% Under the directory's lock, so concurrent starts in any OS process see one
+%% complete pair: exactly one creates it, every other one loads it.
 load_or_create(Dir) ->
-    Cert = certificate_file(Dir),
-    Key = key_file(Dir),
-    case {exists(Cert), exists(Key)} of
-        {false, false} -> create(Dir);
-        {true, true} -> load(Cert, Key);
-        {true, false} -> {error, {anchor_incomplete, Key}};
-        {false, true} -> {error, {anchor_incomplete, Cert}}
+    with_lock(Dir, fun() ->
+        Cert = certificate_file(Dir),
+        Key = key_file(Dir),
+        case {exists(Cert), exists(Key)} of
+            {false, false} -> create(Dir);
+            {true, true} -> load(Cert, Key);
+            {true, false} -> {error, {anchor_incomplete, Key}};
+            {false, true} -> {error, {anchor_incomplete, Cert}}
+        end
+    end).
+
+%% Mint a new root and overwrite whatever the directory held, under the same
+%% lock as `load_or_create`.
+replace(Dir) ->
+    with_lock(Dir, fun() ->
+        case create(Dir) of
+            {ok, _} -> {ok, nil};
+            {error, _} = Error -> Error
+        end
+    end).
+
+%% Cross-process ownership of the directory: a lock file created with
+%% O_EXCL (`exclusive`), which exactly one opener can create on a local
+%% macOS or Linux file system. Holders keep it for milliseconds; a start that
+%% cannot take it within ?LOCK_WAIT_MS reports `anchor_locked` rather than
+%% breaking it, since a lock left by a killed start cannot be told apart from
+%% a slow one without a race of its own.
+with_lock(Dir, Fun) ->
+    case ensure_dir(Dir) of
+        error -> {error, {anchor_write_failed, Dir}};
+        ok ->
+            Lock = filename:join(Dir, ?LOCK_FILE),
+            case acquire(Lock, erlang:monotonic_time(millisecond) + ?LOCK_WAIT_MS) of
+                ok ->
+                    try Fun() after _ = file:delete(Lock) end;
+                Error -> Error
+            end
     end.
 
-%% Mint a new root and overwrite whatever the directory held.
-replace(Dir) ->
-    case create(Dir) of
-        {ok, _} -> {ok, nil};
-        {error, _} = Error -> Error
+acquire(Lock, Deadline) ->
+    case file:open(Lock, [write, exclusive, raw]) of
+        {ok, Io} ->
+            _ = file:write(Io, io_lib:format("~s ~p~n", [os:getpid(), node()])),
+            _ = file:close(Io),
+            ok;
+        {error, eexist} ->
+            case erlang:monotonic_time(millisecond) >= Deadline of
+                true -> {error, {anchor_locked, Lock}};
+                false ->
+                    timer:sleep(10 + rand:uniform(20)),
+                    acquire(Lock, Deadline)
+            end;
+        {error, _} ->
+            {error, {anchor_write_failed, Lock}}
     end.
 
 create(Dir) ->
-    case ensure_dir(Dir) of
+    {Der, Key} = mint_root(),
+    KeyPem = public_key:pem_encode([public_key:pem_entry_encode('ECPrivateKey', Key)]),
+    CertPem = public_key:pem_encode([{'Certificate', Der, not_encrypted}]),
+    %% The key goes first: a directory with a key and no certificate is
+    %% reported as incomplete, never regenerated.
+    case write_file(key_file(Dir), KeyPem, 8#600) of
         ok ->
-            {Der, Key} = mint_root(),
-            KeyPem = public_key:pem_encode([public_key:pem_entry_encode('ECPrivateKey', Key)]),
-            CertPem = public_key:pem_encode([{'Certificate', Der, not_encrypted}]),
-            %% The key goes first: a directory with a key and no certificate
-            %% is reported as incomplete, never regenerated.
-            case write_file(key_file(Dir), KeyPem, 8#600) of
-                ok ->
-                    case write_file(certificate_file(Dir), CertPem, 8#644) of
-                        ok -> {ok, {Der, Key}};
-                        Error -> Error
-                    end;
+            case write_file(certificate_file(Dir), CertPem, 8#644) of
+                ok -> {ok, {Der, Key}};
                 Error -> Error
             end;
-        error ->
-            {error, {anchor_write_failed, Dir}}
+        Error -> Error
     end.
 
 exists(Path) ->
@@ -72,6 +111,8 @@ ensure_dir(Dir) ->
                 ok ->
                     case file:make_dir(Dir) of
                         ok -> ok_or_error(file:change_mode(Dir, 8#700));
+                        %% Another start created it first.
+                        {error, eexist} -> ensure_dir(Dir);
                         _ -> error
                     end;
                 _ -> error

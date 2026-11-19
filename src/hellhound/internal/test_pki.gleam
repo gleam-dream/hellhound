@@ -36,6 +36,7 @@ pub type AnchorError {
   AnchorExpired
   AnchorKeyExposed(path: String)
   AnchorWriteFailed(path: String)
+  AnchorLocked(path: String)
 }
 
 /// The root kept in `directory`, created there on first use, and a leaf for

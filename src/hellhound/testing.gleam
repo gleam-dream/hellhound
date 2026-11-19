@@ -450,6 +450,10 @@ pub type TrustAnchorError {
   AnchorKeyExposed(path: String)
   /// The directory or a file could not be created or written.
   AnchorWriteFailed(path: String)
+  /// Another start held the directory's lock file (`path`) for the whole
+  /// wait. Starts hold it only while they create, load or replace the
+  /// anchor; if no provider is starting, a killed start left it: remove it.
+  AnchorLocked(path: String)
 }
 
 /// Listen on this port of 127.0.0.1 instead of a free one, so the issuer
@@ -471,7 +475,9 @@ pub fn with_port(options: ProviderOptions, port: Int) -> ProviderOptions {
 /// starts load both and sign a new leaf for `localhost` and `127.0.0.1`. A
 /// corrupt, incomplete, mismatched, expired or group-readable anchor is a
 /// `TrustAnchorFailed` error, never a silent new root; `replace_trust_anchor`
-/// is the explicit way to mint one.
+/// is the explicit way to mint one. Starts in several processes or worktrees
+/// may share the directory: a lock file created with exclusive create
+/// serializes them, so exactly one creates the root and the others load it.
 ///
 /// The root is a P-256 CA valid for 90 days, limited by critical X.509 name
 /// constraints to `localhost`, 127.0.0.1 and ::1 with path length 0, so a
@@ -564,6 +570,7 @@ fn anchor_error(error: test_pki.AnchorError) -> TrustAnchorError {
     test_pki.AnchorExpired -> AnchorExpired
     test_pki.AnchorKeyExposed(path) -> AnchorKeyExposed(path)
     test_pki.AnchorWriteFailed(path) -> AnchorWriteFailed(path)
+    test_pki.AnchorLocked(path) -> AnchorLocked(path)
   }
 }
 

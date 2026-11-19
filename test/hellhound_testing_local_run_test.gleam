@@ -2,8 +2,10 @@
 //// root a developer trusts once, reused from a caller-chosen directory.
 
 import exception
+import gleam/erlang/process
 import gleam/http/request
 import gleam/int
+import gleam/list
 import gleam/string
 import gleeunit/should
 import hellhound
@@ -168,6 +170,51 @@ pub fn replace_mints_a_new_root_explicitly_test() -> Nil {
   mode(key_path(directory)) |> should.equal(0o600)
 }
 
+pub fn concurrent_starts_on_an_empty_directory_share_one_root_test() -> Nil {
+  let directory = fresh_dir()
+  let replies = process.new_subject()
+  list.repeat(Nil, 16)
+  |> list.each(fn(_) {
+    process.spawn(fn() {
+      case start_anchored(directory) {
+        Ok(provider) -> {
+          process.send(replies, testing.trust_anchor_pem(provider))
+          testing.stop_provider(provider)
+        }
+        Error(error) -> process.send(replies, string.inspect(error))
+      }
+    })
+  })
+  let roots =
+    list.repeat(Nil, 16)
+    |> list.map(fn(_) {
+      let assert Ok(root) = process.receive(replies, 30_000)
+      root
+    })
+  let stored = read(testing.trust_anchor_file(directory))
+  list.unique(roots) |> should.equal([stored])
+}
+
+pub fn separate_os_processes_share_one_root_test() -> Nil {
+  let directory = fresh_dir()
+  let roots = os_process_roots(directory, 6)
+  let stored = read(testing.trust_anchor_file(directory))
+  list.unique(roots) |> should.equal([stored])
+}
+
+pub fn a_lock_left_by_a_killed_start_is_reported_not_broken_test() -> Nil {
+  let directory = created_anchor()
+  let lock = directory <> "/hellhound-root.lock"
+  write(lock, "a start that was killed")
+  start_anchored(directory)
+  |> should.equal(
+    Error(testing.TrustAnchorFailed(directory, testing.AnchorLocked(lock))),
+  )
+  delete(lock)
+  let assert Ok(provider) = start_anchored(directory)
+  testing.stop_provider(provider)
+}
+
 fn start_anchored(
   directory: String,
 ) -> Result(testing.Provider, testing.StartError) {
@@ -226,3 +273,6 @@ fn foreign_leaf_validation(directory: String) -> #(String, String)
 
 @external(erlang, "hellhound_anchor_test_ffi", "expire")
 fn expire(directory: String) -> Nil
+
+@external(erlang, "hellhound_anchor_test_ffi", "os_process_roots")
+fn os_process_roots(directory: String, count: Int) -> List(String)

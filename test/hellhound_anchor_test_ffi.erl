@@ -3,7 +3,8 @@
 %% own public_key.
 -module(hellhound_anchor_test_ffi).
 -export([fresh_dir/0, mode/1, set_mode/2, write/2, read/1, delete/1,
-         copy/2, root_shape/1, foreign_leaf_validation/1, expire/1]).
+         copy/2, root_shape/1, foreign_leaf_validation/1, expire/1,
+         os_process_roots/2]).
 
 -include_lib("public_key/include/public_key.hrl").
 -include_lib("kernel/include/file.hrl").
@@ -144,3 +145,28 @@ seconds({generalTime, [Y1, Y2, Y3, Y4, M1, M2, D1, D2, H1, H2, I1, I2, S1, S2, $
     calendar:datetime_to_gregorian_seconds(
       {{list_to_integer([Y1, Y2, Y3, Y4]), list_to_integer([M1, M2]), list_to_integer([D1, D2])},
        {list_to_integer([H1, H2]), list_to_integer([I1, I2]), list_to_integer([S1, S2])}}).
+
+%% Start `Count` separate OS processes (`erl`) at once, each loading or
+%% creating the anchor in `Dir` through the library's own module, and return
+%% the PEM of the root each one got.
+os_process_roots(Dir, Count) ->
+    Ebin = filename:dirname(code:which(hellhound_test_anchor_ffi)),
+    Erl = os:find_executable("erl"),
+    Eval = lists:flatten(io_lib:format(
+             "{ok, {Der, _}} = hellhound_test_anchor_ffi:load_or_create(~p), "
+             "io:put_chars(binary:encode_hex(Der)), halt().", [Dir])),
+    Ports = [open_port({spawn_executable, Erl},
+                       [{args, ["-noshell", "-pa", Ebin, "-eval", Eval]},
+                        binary, exit_status, use_stdio])
+             || _ <- lists:seq(1, Count)],
+    [collect(Port, <<>>) || Port <- Ports].
+
+collect(Port, Acc) ->
+    receive
+        {Port, {data, Data}} -> collect(Port, <<Acc/binary, Data/binary>>);
+        {Port, {exit_status, 0}} ->
+            public_key:pem_encode([{'Certificate', binary:decode_hex(Acc), not_encrypted}]);
+        {Port, {exit_status, Status}} ->
+            iolist_to_binary(io_lib:format("exit ~b: ~s", [Status, Acc]))
+    after 60000 -> <<"timeout">>
+    end.
