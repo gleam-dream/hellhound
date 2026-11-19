@@ -4,7 +4,7 @@
 -module(hellhound_anchor_test_ffi).
 -export([fresh_dir/0, mode/1, set_mode/2, write/2, read/1, delete/1,
          copy/2, root_shape/1, foreign_leaf_validation/1, expire/1,
-         os_process_roots/2]).
+         os_process_roots/2, swap_scalar/1]).
 
 -include_lib("public_key/include/public_key.hrl").
 -include_lib("kernel/include/file.hrl").
@@ -170,3 +170,16 @@ collect(Port, Acc) ->
             iolist_to_binary(io_lib:format("exit ~b: ~s", [Status, Acc]))
     after 60000 -> <<"timeout">>
     end.
+
+%% Keep the key file's public point but replace its private scalar with
+%% another key's, as a damaged or tampered key file would.
+swap_scalar(Dir) ->
+    Path = filename:join(Dir, <<"hellhound-root-key.pem">>),
+    {ok, Pem} = file:read_file(Path),
+    [Entry] = public_key:pem_decode(Pem),
+    Key = public_key:pem_entry_decode(Entry),
+    #'ECPrivateKey'{privateKey = Other} = public_key:generate_key({namedCurve, ?secp256r1}),
+    Swapped = Key#'ECPrivateKey'{privateKey = Other},
+    ok = file:write_file(Path, public_key:pem_encode(
+                                 [public_key:pem_entry_encode('ECPrivateKey', Swapped)])),
+    nil.

@@ -135,6 +135,16 @@ pub fn a_mismatched_key_is_an_error_test() -> Nil {
   )
 }
 
+pub fn a_key_whose_scalar_does_not_match_its_point_is_a_mismatch_test() -> Nil {
+  let directory = created_anchor()
+  swap_scalar(directory)
+  mode(key_path(directory)) |> should.equal(0o600)
+  start_anchored(directory)
+  |> should.equal(
+    Error(testing.TrustAnchorFailed(directory, testing.AnchorMismatch)),
+  )
+}
+
 pub fn an_incomplete_anchor_is_an_error_test() -> Nil {
   let directory = created_anchor()
   let certificate = testing.trust_anchor_file(directory)
@@ -276,3 +286,6 @@ fn expire(directory: String) -> Nil
 
 @external(erlang, "hellhound_anchor_test_ffi", "os_process_roots")
 fn os_process_roots(directory: String, count: Int) -> List(String)
+
+@external(erlang, "hellhound_anchor_test_ffi", "swap_scalar")
+fn swap_scalar(directory: String) -> Nil

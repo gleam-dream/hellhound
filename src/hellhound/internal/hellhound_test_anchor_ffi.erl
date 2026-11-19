@@ -203,11 +203,15 @@ decode_key(Pem) ->
     end.
 
 %% The key signs the certificate, and the certificate is a self-signed root
-%% with exactly the loopback constraints this module mints.
-is_our_root(Der, #'OTPCertificate'{tbsCertificate = Tbs}, #'ECPrivateKey'{publicKey = Point}) ->
+%% with exactly the loopback constraints this module mints. The public point
+%% is derived from the private scalar, which is what signs leaves; the point
+%% stored beside it in the key file must agree.
+is_our_root(Der, #'OTPCertificate'{tbsCertificate = Tbs},
+            #'ECPrivateKey'{publicKey = Stored} = Key) ->
     #'OTPTBSCertificate'{subjectPublicKeyInfo = Spki, extensions = Exts,
                          issuer = Issuer, subject = Subject} = Tbs,
-    case Spki of
+    Point = derived_point(Key),
+    case Point =:= Stored andalso Spki of
         #'OTPSubjectPublicKeyInfo'{subjectPublicKey = #'ECPoint'{point = Point}} ->
             Issuer =:= Subject
                 andalso public_key:pkix_verify(Der, {#'ECPoint'{point = Point},
@@ -215,6 +219,12 @@ is_our_root(Der, #'OTPCertificate'{tbsCertificate = Tbs}, #'ECPrivateKey'{public
                 andalso lists:member(name_constraints(), Exts)
                 andalso lists:member(basic_constraints(), Exts);
         _ -> false
+    end.
+
+derived_point(#'ECPrivateKey'{privateKey = Scalar}) ->
+    try crypto:generate_key(ecdh, secp256r1, Scalar) of
+        {Point, _} -> Point
+    catch _:_ -> undefined
     end.
 
 is_current(#'OTPCertificate'{tbsCertificate = #'OTPTBSCertificate'{validity = V}}) ->
