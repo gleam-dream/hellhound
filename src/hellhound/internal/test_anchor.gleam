@@ -49,6 +49,7 @@ import gleam/string
 import gleam/time/calendar
 import gleam/time/duration
 import gleam/time/timestamp.{type Timestamp}
+import hellhound/internal/secure
 import kryptos/ec
 import simplifile
 
@@ -227,13 +228,14 @@ fn with_lock(
 ) -> Result(a, AnchorError) {
   use Nil <- result.try(ensure_directory(directory))
   let lock = join(directory, lock_name)
-  let deadline =
-    timestamp.add(timestamp.system_time(), duration.milliseconds(lock_wait_ms))
+  // Monotonic, so a wall-clock step cannot stretch or cut the wait; the wall
+  // clock is used only for certificate validity.
+  let deadline = secure.monotonic_ms() + lock_wait_ms
   use Nil <- result.try(acquire(lock, deadline))
   exception.defer(fn() { simplifile.delete(lock) }, fn() { run(lock) })
 }
 
-fn acquire(lock: String, deadline: Timestamp) -> Result(Nil, AnchorError) {
+fn acquire(lock: String, deadline: Int) -> Result(Nil, AnchorError) {
   case simplifile.create_directory(lock) {
     // Owner-only before anything is created in it. A user who entered it
     // while `mkdir` left it traversable can no longer look up names in it:
@@ -246,16 +248,14 @@ fn acquire(lock: String, deadline: Timestamp) -> Result(Nil, AnchorError) {
           Error(AnchorWriteFailed(lock))
         }
       }
-    Error(simplifile.Eexist) -> {
-      let now = timestamp.system_time()
-      case timestamp.compare(now, deadline) {
-        order.Lt -> {
+    Error(simplifile.Eexist) ->
+      case secure.monotonic_ms() < deadline {
+        True -> {
           process.sleep(10 + int.random(20))
           acquire(lock, deadline)
         }
-        _ -> Error(AnchorLocked(lock))
+        False -> Error(AnchorLocked(lock))
       }
-    }
     Error(_) -> Error(AnchorWriteFailed(lock))
   }
 }
