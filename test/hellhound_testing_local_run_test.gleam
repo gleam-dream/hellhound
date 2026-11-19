@@ -12,6 +12,7 @@ import gleam/result
 import gleam/string
 import gleeunit/should
 import hellhound
+import hellhound/internal/test_anchor
 import hellhound/testing
 import simplifile
 
@@ -254,6 +255,51 @@ pub fn a_lock_left_by_a_killed_start_is_reported_not_broken_test() -> Nil {
   delete(lock)
   let assert Ok(provider) = start_anchored(directory)
   testing.stop_provider(provider)
+}
+
+pub fn anchor_bytes_are_never_reachable_by_others_test() -> Nil {
+  // An existing directory other users can traverse, as `mkdir` under umask
+  // 022 leaves it.
+  let directory = fresh_dir()
+  let assert Ok(Nil) = simplifile.create_directory(directory)
+  set_mode(directory, 0o755)
+  let seen = process.new_subject()
+  let assert Ok(Nil) =
+    test_anchor.replace_observing(directory, fn(path) {
+      process.send(seen, #(path, reachable_by_others(path, directory)))
+    })
+  let observed = receive_all(seen, [])
+  list.length(observed) |> should.equal(2)
+  observed
+  |> list.filter(fn(entry) { entry.1 })
+  |> should.equal([])
+  mode(key_path(directory)) |> should.equal(0o600)
+}
+
+/// Whether another local user could open `path` at this moment: the file
+/// grants group or others access, and every directory between `anchor` and
+/// it lets them traverse.
+fn reachable_by_others(path: String, anchor: String) -> Bool {
+  let open_to_others = int.bitwise_and(mode(path), 0o066) != 0
+  let parents =
+    string.drop_start(path, string.length(anchor) + 1)
+    |> string.split("/")
+    |> list.reverse
+    |> list.drop(1)
+    |> list.reverse
+  let #(_, traversable) =
+    list.fold(parents, #(anchor, True), fn(acc, segment) {
+      let directory = acc.0 <> "/" <> segment
+      #(directory, acc.1 && int.bitwise_and(mode(directory), 0o011) != 0)
+    })
+  open_to_others && traversable
+}
+
+fn receive_all(subject: process.Subject(a), acc: List(a)) -> List(a) {
+  case process.receive(subject, 0) {
+    Ok(value) -> receive_all(subject, [value, ..acc])
+    Error(Nil) -> list.reverse(acc)
+  }
 }
 
 fn start_anchored(

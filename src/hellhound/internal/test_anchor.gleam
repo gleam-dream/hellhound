@@ -99,6 +99,13 @@ fn key_file(directory: String) -> String {
   join(directory, key_name)
 }
 
+fn base_name(path: String) -> String {
+  case list.last(string.split(path, "/")) {
+    Ok(name) -> name
+    Error(Nil) -> path
+  }
+}
+
 fn join(directory: String, name: String) -> String {
   case string.ends_with(directory, "/") {
     True -> directory <> name
@@ -113,11 +120,11 @@ fn join(directory: String, name: String) -> String {
 /// directory's lock, so concurrent starts in any OS process see one complete
 /// pair: exactly one creates it, every other one loads it.
 pub fn load_or_create(directory: String) -> Result(Root, AnchorError) {
-  use <- with_lock(directory)
+  use lock <- with_lock(directory)
   let certificate = certificate_file(directory)
   let key = key_file(directory)
   case exists(certificate), exists(key) {
-    False, False -> create(directory)
+    False, False -> create(directory, lock)
     True, True -> load(certificate, key)
     True, False -> Error(AnchorIncomplete(key))
     False, True -> Error(AnchorIncomplete(certificate))
@@ -127,11 +134,31 @@ pub fn load_or_create(directory: String) -> Result(Root, AnchorError) {
 /// Mint a new root in `directory`, replacing the one kept there, under the
 /// same lock as `load_or_create`.
 pub fn replace(directory: String) -> Result(Nil, AnchorError) {
-  use <- with_lock(directory)
-  create(directory) |> result.replace(Nil)
+  replace_observing(directory, fn(_) { Nil })
 }
 
-fn create(directory: String) -> Result(Root, AnchorError) {
+/// `replace`, calling `observe` with each file that will hold anchor bytes
+/// right after it is created, before its mode is set or its content written.
+/// A test seam: it lets a test check where such a file can be reached from.
+pub fn replace_observing(
+  directory: String,
+  observe: fn(String) -> Nil,
+) -> Result(Nil, AnchorError) {
+  use lock <- with_lock(directory)
+  create_observing(directory, lock, observe) |> result.replace(Nil)
+}
+
+fn create(directory: String, lock: String) -> Result(Root, AnchorError) {
+  create_observing(directory, lock, fn(_) { Nil })
+}
+
+/// Each file is staged in the lock directory, which only this start can
+/// enter, and renamed into place once its mode and content are final.
+fn create_observing(
+  directory: String,
+  lock: String,
+  observe: fn(String) -> Nil,
+) -> Result(Root, AnchorError) {
   let #(key, public) = ec.generate_key_pair(ec.P256)
   let der = mint_root(key, ec.public_key_to_raw_point(public))
   let certificate_pem =
@@ -142,11 +169,19 @@ fn create(directory: String) -> Result(Root, AnchorError) {
   )
   // The key goes first: a directory with a key and no certificate is
   // reported as incomplete, never regenerated.
-  use Nil <- result.try(write_file(key_file(directory), key_pem, 0o600))
   use Nil <- result.try(write_file(
+    lock,
+    key_file(directory),
+    key_pem,
+    0o600,
+    observe,
+  ))
+  use Nil <- result.try(write_file(
+    lock,
     certificate_file(directory),
     certificate_pem,
     0o644,
+    observe,
   ))
   Ok(Root(der:, key:))
 }
@@ -169,19 +204,29 @@ fn exists(path: String) -> Bool {
 /// a race of its own.
 fn with_lock(
   directory: String,
-  run: fn() -> Result(a, AnchorError),
+  run: fn(String) -> Result(a, AnchorError),
 ) -> Result(a, AnchorError) {
   use Nil <- result.try(ensure_directory(directory))
   let lock = join(directory, lock_name)
   let deadline =
     timestamp.add(timestamp.system_time(), duration.milliseconds(lock_wait_ms))
   use Nil <- result.try(acquire(lock, deadline))
-  exception.defer(fn() { simplifile.delete(lock) }, run)
+  exception.defer(fn() { simplifile.delete(lock) }, fn() { run(lock) })
 }
 
 fn acquire(lock: String, deadline: Timestamp) -> Result(Nil, AnchorError) {
   case simplifile.create_directory(lock) {
-    Ok(Nil) -> Ok(Nil)
+    // Owner-only before anything is created in it. A user who entered it
+    // while `mkdir` left it traversable can no longer look up names in it:
+    // the search permission is checked on every lookup, and it was empty.
+    Ok(Nil) ->
+      case simplifile.set_permissions_octal(lock, 0o700) {
+        Ok(Nil) -> Ok(Nil)
+        Error(_) -> {
+          let _ = simplifile.delete(lock)
+          Error(AnchorWriteFailed(lock))
+        }
+      }
     Error(simplifile.Eexist) -> {
       let now = timestamp.system_time()
       case timestamp.compare(now, deadline) {
@@ -216,18 +261,21 @@ fn ensure_directory(directory: String) -> Result(Nil, AnchorError) {
   }
 }
 
-/// Write through a temporary file whose mode is set while it is still
-/// empty, then rename it over the final path. Called under the lock, so the
-/// temporary name is the holder's alone.
+/// Write through a file staged in the owner-only lock directory: created
+/// there, given its mode, written, then renamed over the final path. No other
+/// user can reach it before the rename, and it arrives with its final mode.
 fn write_file(
+  lock: String,
   path: String,
   contents: String,
   mode: Int,
+  observe: fn(String) -> Nil,
 ) -> Result(Nil, AnchorError) {
-  let temporary = path <> ".tmp"
+  let temporary = join(lock, base_name(path))
   let _ = simplifile.delete(temporary)
   let written = {
     use Nil <- result.try(simplifile.create_file(temporary))
+    observe(temporary)
     use Nil <- result.try(simplifile.set_permissions_octal(temporary, mode))
     use Nil <- result.try(simplifile.write(temporary, contents))
     simplifile.rename(temporary, path)

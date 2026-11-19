@@ -474,7 +474,9 @@ pub fn with_port(options: ProviderOptions, port: Int) -> ProviderOptions {
 ///
 /// On the first start, the directory (created owner-only if missing) receives
 /// `hellhound-root.pem`, the root to trust (`trust_anchor_file`), and
-/// `hellhound-root-key.pem`, its private key, written with mode 0600. Later
+/// `hellhound-root-key.pem`, its private key, with mode 0600. Both are
+/// written in an owner-only staging directory and renamed into place, so no
+/// other user can open the key even in a directory they can traverse. Later
 /// starts load both and sign a new leaf for `localhost` and `127.0.0.1`. A
 /// corrupt, incomplete, mismatched, expired or group-readable anchor is a
 /// `TrustAnchorFailed` error, never a silent new root; `replace_trust_anchor`
