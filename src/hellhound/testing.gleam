@@ -43,6 +43,28 @@
 //// let assert Ok(session) = hellhound.complete_login(client, callback)
 //// ```
 ////
+//// ## Per-subject claims
+////
+//// For one subject, `with_granted_scopes` scripts the granted scopes,
+//// `with_email_claims` the `email` and `email_verified` assertions, and
+//// `with_extra_claims` any other claim a real provider adds to ID tokens and
+//// userinfo, such as a namespaced roles claim or `name`. `set_granted_scopes`,
+//// `set_email_claims` and `set_extra_claims` change them for later logins.
+//// `extra_claim` refuses reserved protocol claims with `ReservedClaim`.
+////
+//// ```gleam
+//// let assert Ok(roles) =
+////   testing.extra_claim(
+////     "https://example.test/roles",
+////     json.array(["operator"], json.string),
+////   )
+//// testing.provider_options() |> testing.with_extra_claims("ada", [roles])
+//// ```
+////
+//// The application reads them from the verified identity as in production
+//// (`hellhound.decode_claims`, `hellhound.name`); nothing outside this
+//// provider changes.
+////
 //// ## Access tokens
 ////
 //// `set_access_token_audiences` changes the `aud` of issued access tokens
@@ -99,6 +121,7 @@ pub opaque type ProviderOptions {
     login: LoginDecision,
     granted_scopes: Dict(String, List(String)),
     email_claims: Dict(String, EmailClaims),
+    extra_claims: Dict(String, List(ExtraClaim)),
   )
 }
 
@@ -130,6 +153,7 @@ pub fn provider_options() -> ProviderOptions {
     login: SignIn("test-user"),
     granted_scopes: dict.new(),
     email_claims: dict.new(),
+    extra_claims: dict.new(),
   )
 }
 
@@ -159,6 +183,78 @@ pub fn with_email_claims(
   ProviderOptions(
     ..options,
     email_claims: dict.insert(options.email_claims, subject, claims),
+  )
+}
+
+/// One additional claim a subject's ID tokens and userinfo carry, such as a
+/// provider's namespaced roles claim or a standard profile claim like
+/// `name`. Build it with `extra_claim`, which refuses reserved names, so a
+/// value of this type never names a protocol claim.
+pub opaque type ExtraClaim {
+  ExtraClaim(name: String, value: json.Json)
+}
+
+pub type ExtraClaimError {
+  /// The name is a claim the provider computes or another testing function
+  /// owns (`email` and `email_verified` belong to `with_email_claims`).
+  ReservedClaim(name: String)
+}
+
+/// The claims an extra claim can never name: JWT registered claims, the
+/// ID-token protocol claims the provider computes or Hellhound verifies,
+/// claim-source indirection, and the email claims `EmailClaims` owns.
+const reserved_claims = [
+  "iss", "sub", "aud", "exp", "iat", "nbf", "jti", "nonce", "azp", "at_hash",
+  "c_hash", "s_hash", "auth_time", "sid", "cnf", "_claim_names",
+  "_claim_sources", "email", "email_verified",
+]
+
+/// An extra claim with any JSON value, for example a role list or a profile
+/// string:
+///
+/// ```gleam
+/// let assert Ok(roles) =
+///   testing.extra_claim(
+///     "https://example.test/roles",
+///     json.array(["operator"], json.string),
+///   )
+/// let assert Ok(name) = testing.extra_claim("name", json.string("Ada"))
+/// ```
+///
+/// Reserved protocol claims (`iss`, `sub`, `aud`, `exp`, `iat`, `nbf`,
+/// `jti`, `nonce`, `azp`, `at_hash`, `c_hash`, `s_hash`, `auth_time`, `sid`,
+/// `cnf`, `_claim_names`, `_claim_sources`) and the email claims return
+/// `ReservedClaim`. This is a provider assertion for tests, not a permission.
+pub fn extra_claim(
+  name: String,
+  value: json.Json,
+) -> Result(ExtraClaim, ExtraClaimError) {
+  case list.contains(reserved_claims, name) {
+    True -> Error(ReservedClaim(name))
+    False -> Ok(ExtraClaim(name:, value:))
+  }
+}
+
+/// Add these claims for one subject to newly issued ID tokens and userinfo,
+/// replacing any extra claims set for that subject before. A later claim of
+/// the same name replaces an earlier one in the list; an empty list removes
+/// the subject's extra claims. A subject without an entry gets none, so
+/// existing tokens and userinfo are unchanged.
+///
+/// Only this test provider's issued evidence changes: the client still
+/// verifies every token as in production, and the claims reach the
+/// application only through `hellhound.decode_claims`, the profile accessors
+/// and `hellhound.decode_userinfo`. Verification, token custody,
+/// configuration and the opaque `VerifiedIdentity` are untouched.
+/// Reserved protocol claims, identity constructors and production trust are unchanged.
+pub fn with_extra_claims(
+  options: ProviderOptions,
+  subject: String,
+  claims: List(ExtraClaim),
+) -> ProviderOptions {
+  ProviderOptions(
+    ..options,
+    extra_claims: dict.insert(options.extra_claims, subject, claims),
   )
 }
 
@@ -444,6 +540,19 @@ pub fn set_email_claims(
 ) -> Nil {
   transact(provider.state, fn(s) {
     #(State(..s, options: with_email_claims(s.options, subject, claims)), Nil)
+  })
+}
+
+/// What `with_extra_claims` does, for ID tokens and userinfo reads from now
+/// on. Previously issued tokens and verified identities remain unchanged, and
+/// nothing outside this test provider changes behaviour.
+pub fn set_extra_claims(
+  provider: Provider,
+  subject: String,
+  claims: List(ExtraClaim),
+) -> Nil {
+  transact(provider.state, fn(s) {
+    #(State(..s, options: with_extra_claims(s.options, subject, claims)), Nil)
   })
 }
 
@@ -1531,6 +1640,7 @@ fn id_token(state: State, grant: CodeGrant) -> String {
       #("auth_time", json.int(grant.auth_time)),
     ]
     |> list.append(email_fields(state.options, grant.subject, Some(True)))
+    |> list.append(extra_fields(state.options, grant.subject))
     |> list.fold(claims, fn(claims, pair) {
       let assert Ok(claims) = jwt.with_claim(claims, key: pair.0, value: pair.1)
       claims
@@ -1559,6 +1669,21 @@ fn email_fields(
       list.append(fields, [#("email_verified", json.bool(verified))])
     None -> fields
   }
+}
+
+/// The subject's extra claims, one per name, the last of a repeated name
+/// winning. Reserved names cannot occur: `extra_claim` refuses them.
+fn extra_fields(
+  options: ProviderOptions,
+  subject: String,
+) -> List(#(String, json.Json)) {
+  dict.get(options.extra_claims, subject)
+  |> result.unwrap([])
+  |> list.fold(dict.new(), fn(fields, claim) {
+    let ExtraClaim(name:, value:) = claim
+    dict.insert(fields, name, value)
+  })
+  |> dict.to_list
 }
 
 fn access_claims_json(claims: AccessClaims) -> List(#(String, json.Json)) {
@@ -1652,6 +1777,7 @@ fn userinfo_endpoint(
             #("sub", json.string(claims.subject)),
             ..email_fields(s.options, claims.subject, None)
           ]
+          |> list.append(extra_fields(s.options, claims.subject))
         })
       #(s, fields)
     })

@@ -5,9 +5,13 @@
 //// trusting `testing.trust_anchor_pem`, and returns to `/callback` with no
 //// test hook in the application. Unit tests that hold a `LoginRedirect` call
 //// `testing.authorize` and skip HTTP. The provider also mints and revokes
-//// tokens, skews its clock, rotates its key and counts requests.
+//// tokens, skews its clock, rotates its key and counts requests. Per subject,
+//// it scripts granted scopes, email claims and extra ID-token claims such as
+//// a namespaced roles claim, so a test signs in as production does.
 
+import gleam/dynamic/decode
 import gleam/http/request
+import gleam/json
 import gleam/option.{None, Some}
 import hellhound
 import hellhound/testing
@@ -40,8 +44,18 @@ pub fn sign_in_then_refuse() -> Nil {
 /// replaces the scopes a login is granted, so a test can sign in a user who
 /// lacks a scope; the scopes appear in the access token and at introspection.
 /// Email claims are provider assertions: each is independently optional.
+/// Extra claims carry what a real provider adds, such as roles in a namespaced
+/// claim or `name`; `extra_claim` refuses protocol claims such as `iss`.
 pub fn run() -> Nil {
   sign_in_then_refuse()
+  let assert Ok(roles) =
+    testing.extra_claim(
+      "https://example.test/roles",
+      json.array(["operator"], json.string),
+    )
+  let assert Ok(name) = testing.extra_claim("name", json.string("Ada"))
+  let assert Error(testing.ReservedClaim("iss")) =
+    testing.extra_claim("iss", json.string("https://elsewhere.test"))
   let assert Ok(provider) =
     testing.start_provider(
       testing.provider_options()
@@ -50,7 +64,8 @@ pub fn run() -> Nil {
       |> testing.with_email_claims(
         "ada",
         testing.EmailClaims(Some("ada@example.test"), Some(False)),
-      ),
+      )
+      |> testing.with_extra_claims("ada", [roles, name]),
     )
   let assert Ok(client) =
     hellhound.new(testing.config(provider, "https://app.test/callback"))
@@ -66,6 +81,13 @@ pub fn run() -> Nil {
   let ada = sign_in("ada")
   let mallory = sign_in("mallory")
   assert hellhound.subject(hellhound.session_identity(ada)) == "ada"
+  // Extra claims are read from the verified identity like any other claim.
+  assert hellhound.decode_claims(
+      hellhound.session_identity(ada),
+      decode.at(["https://example.test/roles"], decode.list(decode.string)),
+    )
+    == Ok(["operator"])
+  assert hellhound.name(hellhound.session_identity(ada)) == Some("Ada")
   // Scripted grants reach the access token.
   let assert Ok(access) = hellhound.access_token(client, mallory)
   assert access.scopes == ["openid"]
@@ -76,6 +98,7 @@ pub fn run() -> Nil {
   // Email claims can be changed for later evidence without touching a held
   // identity.
   testing.set_email_claims(provider, "ada", testing.EmailClaims(None, None))
+  testing.set_extra_claims(provider, "ada", [])
   assert hellhound.subject(hellhound.session_identity(ada)) == "ada"
   hellhound.stop(client)
   testing.stop_provider(provider)
