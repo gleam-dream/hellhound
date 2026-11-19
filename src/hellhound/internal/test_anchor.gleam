@@ -206,13 +206,6 @@ fn entry(path: String) -> Result(Bool, AnchorError) {
   }
 }
 
-fn exists(path: String) -> Bool {
-  case simplifile.file_info(path) {
-    Error(simplifile.Enoent) -> False
-    _ -> True
-  }
-}
-
 // ===========================================================================
 // Ownership and files
 
@@ -261,22 +254,37 @@ fn acquire(lock: String, deadline: Int) -> Result(Nil, AnchorError) {
 }
 
 /// A directory this creates is owner-only; an existing one is the caller's.
+/// Concurrent first starts may race to create it: a create that fails because
+/// the directory now exists is success, and anything else stays an error.
 fn ensure_directory(directory: String) -> Result(Nil, AnchorError) {
   let failed = Error(AnchorWriteFailed(directory))
   case simplifile.is_directory(directory) {
     Ok(True) -> Ok(Nil)
-    Ok(False) ->
-      case exists(directory) {
-        True -> failed
-        False ->
-          case simplifile.create_directory_all(directory) {
-            Ok(Nil) ->
-              simplifile.set_permissions_octal(directory, 0o700)
-              |> result.replace_error(AnchorWriteFailed(directory))
-            Error(_) -> failed
+    Error(_) -> failed
+    Ok(False) -> {
+      let _ = simplifile.create_directory_all(parent(directory))
+      case simplifile.create_directory(directory) {
+        Ok(Nil) ->
+          simplifile.set_permissions_octal(directory, 0o700)
+          |> result.replace_error(AnchorWriteFailed(directory))
+        Error(_) ->
+          case simplifile.is_directory(directory) {
+            Ok(True) -> Ok(Nil)
+            _ -> failed
           }
       }
-    Error(_) -> failed
+    }
+  }
+}
+
+fn parent(path: String) -> String {
+  let trimmed = case string.ends_with(path, "/") {
+    True -> string.drop_end(path, 1)
+    False -> path
+  }
+  case list.reverse(string.split(trimmed, "/")) {
+    [_, ..rest] if rest != [] -> string.join(list.reverse(rest), "/")
+    _ -> "."
   }
 }
 

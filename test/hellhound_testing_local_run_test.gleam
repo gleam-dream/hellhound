@@ -237,6 +237,34 @@ pub fn concurrent_starts_on_an_empty_directory_share_one_root_test() -> Nil {
   list.unique(roots) |> should.equal([stored])
 }
 
+/// Concurrent first uses of a directory that does not exist yet, nor its
+/// parent, repeated to reach the window where one start creates the
+/// directory while another is still deciding to.
+pub fn concurrent_first_uses_create_the_missing_directory_test() -> Nil {
+  list.repeat(Nil, 40)
+  |> list.each(fn(_) {
+    let directory = fresh_dir() <> "/nested/anchor"
+    let replies = process.new_subject()
+    list.repeat(Nil, 12)
+    |> list.each(fn(_) {
+      process.spawn(fn() {
+        let outcome =
+          test_anchor.load_or_create(directory)
+          |> result.map(test_anchor.root_der)
+        process.send(replies, outcome)
+      })
+    })
+    let outcomes =
+      list.repeat(Nil, 12)
+      |> list.map(fn(_) {
+        let assert Ok(outcome) = process.receive(replies, 30_000)
+        outcome
+      })
+    list.filter(outcomes, result.is_error) |> should.equal([])
+    list.unique(outcomes) |> list.length |> should.equal(1)
+  })
+}
+
 pub fn separate_os_processes_share_one_root_test() -> Nil {
   let directory = fresh_dir()
   let roots = os_process_roots(directory, 6)
