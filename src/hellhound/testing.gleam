@@ -456,9 +456,12 @@ pub type TrustAnchorError {
   AnchorKeyExposed(path: String)
   /// The directory or a file could not be created or written.
   AnchorWriteFailed(path: String)
-  /// Another start held the directory's lock (`path`, a directory) for the
-  /// whole wait. Starts hold it only while they create, load or replace the
-  /// anchor; if no provider is starting, a killed start left it: remove it.
+  /// The directory's lock (`path`, the `hellhound-root.lock` directory) was
+  /// held for the whole wait of about five seconds. Starts hold it only while
+  /// they create, load or replace the anchor, so this means either a start
+  /// killed while holding it left it behind, or a live start is still working
+  /// (retry). Remove it only after confirming no start is running against the
+  /// directory; it may hold staged anchor files, readable only by you.
   AnchorLocked(path: String)
 }
 

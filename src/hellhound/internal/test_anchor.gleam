@@ -214,7 +214,11 @@ fn entry(path: String) -> Result(Bool, AnchorError) {
 /// file system. Holders keep it for milliseconds; a start that cannot take it
 /// within `lock_wait_ms` reports `AnchorLocked` rather than breaking it, since
 /// a lock left by a killed start cannot be told apart from a slow one without
-/// a race of its own.
+/// a race of its own. So `AnchorLocked` has two causes: a start killed while
+/// holding the lock left it behind (every later start fails until the
+/// developer removes it), or a live holder outlasted the wait (a retry
+/// succeeds). The developer removes a stale lock only after confirming no
+/// start is running against the directory.
 fn with_lock(
   directory: String,
   run: fn(String) -> Result(a, AnchorError),
