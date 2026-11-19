@@ -148,6 +148,7 @@ import hellhound.{type LoginRedirect}
 import hellhound/config.{type Config}
 import hellhound/internal/memory_store
 import hellhound/internal/secure
+import hellhound/internal/test_anchor
 import hellhound/internal/test_pki
 import hellhound/internal/tls_server
 import hellhound/store.{type Store, Record}
@@ -452,8 +453,8 @@ pub type TrustAnchorError {
   AnchorKeyExposed(path: String)
   /// The directory or a file could not be created or written.
   AnchorWriteFailed(path: String)
-  /// Another start held the directory's lock file (`path`) for the whole
-  /// wait. Starts hold it only while they create, load or replace the
+  /// Another start held the directory's lock (`path`, a directory) for the
+  /// whole wait. Starts hold it only while they create, load or replace the
   /// anchor; if no provider is starting, a killed start left it: remove it.
   AnchorLocked(path: String)
 }
@@ -478,8 +479,9 @@ pub fn with_port(options: ProviderOptions, port: Int) -> ProviderOptions {
 /// corrupt, incomplete, mismatched, expired or group-readable anchor is a
 /// `TrustAnchorFailed` error, never a silent new root; `replace_trust_anchor`
 /// is the explicit way to mint one. Starts in several processes or worktrees
-/// may share the directory: a lock file created with exclusive create
-/// serializes them, so exactly one creates the root and the others load it.
+/// may share the directory: a lock made with `mkdir`, exclusive across
+/// processes, serializes them, so exactly one creates the root and the others
+/// load it.
 ///
 /// The root is a P-256 CA valid for 90 days, limited by critical X.509 name
 /// constraints to `localhost`, 127.0.0.1 and ::1 with path length 0, so a
@@ -500,7 +502,7 @@ pub fn with_trust_anchor(
 /// The path of the root certificate kept in `directory`, the one file a
 /// developer adds to their trust store.
 pub fn trust_anchor_file(directory: String) -> String {
-  test_pki.certificate_file(directory)
+  test_anchor.certificate_file(directory)
 }
 
 /// Mint a new root in `directory` and overwrite the one kept there, for an
@@ -509,7 +511,7 @@ pub fn trust_anchor_file(directory: String) -> String {
 pub fn replace_trust_anchor(
   directory: String,
 ) -> Result(Nil, TrustAnchorError) {
-  test_pki.replace(directory) |> result.map_error(anchor_error)
+  test_anchor.replace(directory) |> result.map_error(anchor_error)
 }
 
 /// Start a provider, reporting why it could not start. It is linked to the
@@ -525,7 +527,11 @@ pub fn start(options: ProviderOptions) -> Result(Provider, StartError) {
     Some(directory) ->
       test_pki.anchored(directory)
       |> result.map_error(fn(error) {
-        TrustAnchorFailed(directory, anchor_error(error))
+        case error {
+          test_pki.AnchorFailed(error) ->
+            TrustAnchorFailed(directory, anchor_error(error))
+          test_pki.LeafFailed -> StartFailed
+        }
       })
   })
   use started <- result.try(
@@ -563,16 +569,16 @@ pub fn start(options: ProviderOptions) -> Result(Provider, StartError) {
   ))
 }
 
-fn anchor_error(error: test_pki.AnchorError) -> TrustAnchorError {
+fn anchor_error(error: test_anchor.AnchorError) -> TrustAnchorError {
   case error {
-    test_pki.AnchorUnreadable(path) -> AnchorUnreadable(path)
-    test_pki.AnchorCorrupt(path) -> AnchorCorrupt(path)
-    test_pki.AnchorIncomplete(missing) -> AnchorIncomplete(missing)
-    test_pki.AnchorMismatch -> AnchorMismatch
-    test_pki.AnchorExpired -> AnchorExpired
-    test_pki.AnchorKeyExposed(path) -> AnchorKeyExposed(path)
-    test_pki.AnchorWriteFailed(path) -> AnchorWriteFailed(path)
-    test_pki.AnchorLocked(path) -> AnchorLocked(path)
+    test_anchor.AnchorUnreadable(path) -> AnchorUnreadable(path)
+    test_anchor.AnchorCorrupt(path) -> AnchorCorrupt(path)
+    test_anchor.AnchorIncomplete(missing) -> AnchorIncomplete(missing)
+    test_anchor.AnchorMismatch -> AnchorMismatch
+    test_anchor.AnchorExpired -> AnchorExpired
+    test_anchor.AnchorKeyExposed(path) -> AnchorKeyExposed(path)
+    test_anchor.AnchorWriteFailed(path) -> AnchorWriteFailed(path)
+    test_anchor.AnchorLocked(path) -> AnchorLocked(path)
   }
 }
 

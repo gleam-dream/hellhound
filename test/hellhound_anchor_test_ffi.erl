@@ -147,16 +147,18 @@ seconds({generalTime, [Y1, Y2, Y3, Y4, M1, M2, D1, D2, H1, H2, I1, I2, S1, S2, $
        {list_to_integer([H1, H2]), list_to_integer([I1, I2]), list_to_integer([S1, S2])}}).
 
 %% Start `Count` separate OS processes (`erl`) at once, each loading or
-%% creating the anchor in `Dir` through the library's own module, and return
-%% the PEM of the root each one got.
+%% creating the anchor in `Dir` through the library's own Gleam module
+%% (`hellhound/internal/test_anchor`), and return the PEM of the root each
+%% one got.
 os_process_roots(Dir, Count) ->
-    Ebin = filename:dirname(code:which(hellhound_test_anchor_ffi)),
+    Paths = [P || P <- code:get_path(), string:find(P, "/build/") =/= nomatch],
     Erl = os:find_executable("erl"),
     Eval = lists:flatten(io_lib:format(
-             "{ok, {Der, _}} = hellhound_test_anchor_ffi:load_or_create(~p), "
-             "io:put_chars(binary:encode_hex(Der)), halt().", [Dir])),
+             "{ok, Root} = 'hellhound@internal@test_anchor':load_or_create(~p), "
+             "io:put_chars(binary:encode_hex('hellhound@internal@test_anchor':root_der(Root))), "
+             "halt().", [Dir])),
     Ports = [open_port({spawn_executable, Erl},
-                       [{args, ["-noshell", "-pa", Ebin, "-eval", Eval]},
+                       [{args, ["-noshell", "-pa" | Paths] ++ ["-eval", Eval]},
                         binary, exit_status, use_stdio])
              || _ <- lists:seq(1, Count)],
     [collect(Port, <<>>) || Port <- Ports].
@@ -180,8 +182,10 @@ swap_scalar(Dir) ->
     Key = public_key:pem_entry_decode(Entry),
     #'ECPrivateKey'{privateKey = Other} = public_key:generate_key({namedCurve, ?secp256r1}),
     Swapped = Key#'ECPrivateKey'{privateKey = Other},
+    %% PKCS#8, as the anchor stores it; it wraps the same ECPrivateKey,
+    %% stored public point included.
     ok = file:write_file(Path, public_key:pem_encode(
-                                 [public_key:pem_entry_encode('ECPrivateKey', Swapped)])),
+                                 [public_key:pem_entry_encode('PrivateKeyInfo', Swapped)])),
     nil.
 
 %% Re-sign the anchor's root with its own key after one change to its
