@@ -3,6 +3,10 @@
 //// `public_key:pkix_test_data/1`. OTP refuses a self-signed peer even when
 //// it is the configured anchor, so the leaf must be CA-issued. Nothing is
 //// written to disk.
+////
+//// `anchored` instead keeps a root constrained to loopback names in a
+//// caller-chosen directory, reuses it on later starts and signs a fresh leaf
+//// per start (`hellhound_test_anchor_ffi.erl`).
 
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
@@ -22,6 +26,43 @@ pub type Pki {
     key: Dynamic,
   )
 }
+
+/// Why a kept root cannot be used. Never answered by minting a new root.
+pub type AnchorError {
+  AnchorUnreadable(path: String)
+  AnchorCorrupt(path: String)
+  AnchorIncomplete(missing: String)
+  AnchorMismatch
+  AnchorExpired
+  AnchorKeyExposed(path: String)
+  AnchorWriteFailed(path: String)
+}
+
+/// The root kept in `directory`, created there on first use, and a leaf for
+/// `localhost` and `127.0.0.1` it signs now.
+pub fn anchored(directory: String) -> Result(Pki, AnchorError) {
+  use #(root, root_key) <- result.try(load_or_create(directory))
+  let #(certificate, key) = mint_leaf(root, root_key)
+  let a = atom.create
+  let ca_pem = pem_encode([#(a("Certificate"), root, a("not_encrypted"))])
+  Ok(Pki(ca_pem:, ca_der: root, certificate:, key:))
+}
+
+/// Mint a new root in `directory`, replacing the one kept there.
+@external(erlang, "hellhound_test_anchor_ffi", "replace")
+pub fn replace(directory: String) -> Result(Nil, AnchorError)
+
+/// Path of the root certificate a developer trusts.
+@external(erlang, "hellhound_test_anchor_ffi", "certificate_file")
+pub fn certificate_file(directory: String) -> String
+
+@external(erlang, "hellhound_test_anchor_ffi", "load_or_create")
+fn load_or_create(
+  directory: String,
+) -> Result(#(BitArray, Dynamic), AnchorError)
+
+@external(erlang, "hellhound_test_anchor_ffi", "leaf")
+fn mint_leaf(root: BitArray, root_key: Dynamic) -> #(BitArray, Dynamic)
 
 pub fn generate() -> Result(Pki, Nil) {
   let a = atom.create

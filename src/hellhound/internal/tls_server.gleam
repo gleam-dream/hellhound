@@ -25,10 +25,26 @@ const max_head = 65_536
 
 const max_body = 1_048_576
 
+pub type ListenError {
+  /// The fixed port is taken.
+  AddressInUse
+  ListenFailed
+}
+
+/// Listen on a free port of 127.0.0.1.
 pub fn start(
   pki: Pki,
   handle: fn(Request(String)) -> Response(String),
 ) -> Result(Server, Nil) {
+  start_on(pki, 0, handle) |> result.replace_error(Nil)
+}
+
+/// Listen on `port` of 127.0.0.1 only; 0 lets the OS pick a free port.
+pub fn start_on(
+  pki: Pki,
+  port: Int,
+  handle: fn(Request(String)) -> Response(String),
+) -> Result(Server, ListenError) {
   let a = atom.create
   let options = [
     to_dynamic(a("binary")),
@@ -39,14 +55,23 @@ pub fn start(
     to_dynamic(#(a("key"), pki.key)),
     to_dynamic(#(a("versions"), [a("tlsv1.3"), a("tlsv1.2")])),
   ]
-  use _ <- result.try(ensure_ssl())
-  use listen <- result.try(ok(ssl_listen(0, options)))
+  use _ <- result.try(ensure_ssl() |> result.replace_error(ListenFailed))
+  let listening = ssl_listen(port, options)
+  use listen <- result.try(case ok(listening) {
+    Ok(listen) -> Ok(listen)
+    Error(Nil) ->
+      case listening == to_dynamic(#(a("error"), a("eaddrinuse"))) {
+        True -> Error(AddressInUse)
+        False -> Error(ListenFailed)
+      }
+  })
   use port <- result.try(
     ok(ssl_sockname(listen))
     |> result.try(fn(address) {
       decode.run(address, decode.at([1], decode.int))
       |> result.replace_error(Nil)
-    }),
+    })
+    |> result.replace_error(ListenFailed),
   )
   // Linked: the server goes when its owner does.
   let acceptor = process.spawn(fn() { accept_loop(listen, handle) })

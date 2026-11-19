@@ -5,7 +5,8 @@
 //// `/authorize`, token (authorization code with PKCE S256, rotating
 //// refresh tokens, client credentials), userinfo, introspection,
 //// revocation and end-session over HTTPS on loopback. Its certificate
-//// chains to a root generated at start; `config` and `trusting` trust that
+//// chains to a root generated at start (or kept by `with_trust_anchor` for
+//// a local run); `config` and `trusting` trust that
 //// root and allow loopback explicitly, so no production default changes.
 //// ID and access tokens are signed ES256 with gose.
 ////
@@ -65,6 +66,48 @@
 //// (`hellhound.decode_claims`, `hellhound.name`); nothing outside this
 //// provider changes.
 ////
+//// ## A local run with a real browser
+////
+//// For local development only, never a deployed environment. By default
+//// every start picks a free port and mints a fresh in-memory root, so a
+//// browser sees a new issuer and an unknown certificate authority each run.
+//// `with_port` fixes the port and `with_trust_anchor` keeps one root in a
+//// directory you choose, so the issuer and the root stay the same and you
+//// trust the root once:
+////
+//// ```gleam
+//// let assert Ok(provider) =
+////   testing.start(
+////     testing.provider_options()
+////     |> testing.with_port(8443)
+////     |> testing.with_trust_anchor(".local/hellhound"),
+////   )
+//// // issuer: https://localhost:8443
+//// // trust once: testing.trust_anchor_file(".local/hellhound")
+//// ```
+////
+//// The root may only certify `localhost`, 127.0.0.1 and ::1 (critical X.509
+//// name constraints, path length 0) and lasts 90 days; its private key is
+//// written with mode 0600 in that directory. Keep the directory out of
+//// version control. A broken or expired anchor is a `TrustAnchorFailed`
+//// error; `replace_trust_anchor` mints a new root, which you trust again.
+//// Hellhound never runs a trust-store command. To trust the root yourself:
+////
+//// - macOS, current user:
+////   `security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db .local/hellhound/hellhound-root.pem`;
+////   undo with `security remove-trusted-cert .local/hellhound/hellhound-root.pem`.
+//// - Debian or Ubuntu: copy it to
+////   `/usr/local/share/ca-certificates/hellhound-local.crt` and run
+////   `sudo update-ca-certificates`; Fedora: copy it to
+////   `/etc/pki/ca-trust/source/anchors/` and run `sudo update-ca-trust`.
+//// - Chrome or Chromium on Linux:
+////   `certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "Hellhound local" -i .local/hellhound/hellhound-root.pem`.
+////   Firefox keeps its own store (Settings, Certificates, Import).
+////
+//// Browsers and OpenSSL enforce the name constraints. Erlang's `ssl` does not
+//// apply a trust anchor's own constraints, so an Erlang client that trusts
+//// this root is limited only by its hostname check.
+////
 //// ## Access tokens
 ////
 //// `set_access_token_audiences` changes the `aud` of issued access tokens
@@ -77,6 +120,7 @@
 //// unless a configuration names the provider's issuer and root.
 
 import gleam/bit_array
+import gleam/bool
 import gleam/crypto
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
@@ -122,6 +166,8 @@ pub opaque type ProviderOptions {
     granted_scopes: Dict(String, List(String)),
     email_claims: Dict(String, EmailClaims),
     extra_claims: Dict(String, List(ExtraClaim)),
+    port: Int,
+    trust_anchor: Option(String),
   )
 }
 
@@ -154,6 +200,8 @@ pub fn provider_options() -> ProviderOptions {
     granted_scopes: dict.new(),
     email_claims: dict.new(),
     extra_claims: dict.new(),
+    port: 0,
+    trust_anchor: None,
   )
 }
 
@@ -368,12 +416,106 @@ pub type TestError {
   AuthorizationRefused(reason: String)
 }
 
-/// Start a provider on a free loopback port. It is linked to the caller, so
-/// it ends with the test that started it; `stop_provider` ends it earlier.
-pub fn start_provider(options: ProviderOptions) -> Result(Provider, TestError) {
-  use pki <- result.try(
-    test_pki.generate() |> result.replace_error(ProviderStartFailed),
+/// Why `start` could not start a provider.
+pub type StartError {
+  /// The provider's PKI, state or listener did not start.
+  StartFailed
+  /// `with_port` named a port outside 0..65535.
+  InvalidPort(port: Int)
+  /// The fixed port of `with_port` is already in use on 127.0.0.1.
+  PortInUse(port: Int)
+  /// The root kept in `directory` (`with_trust_anchor`) cannot be used. It
+  /// is never replaced silently: fix it, or call `replace_trust_anchor` and
+  /// trust the new root.
+  TrustAnchorFailed(directory: String, error: TrustAnchorError)
+}
+
+/// Why a kept trust anchor cannot be used or written.
+pub type TrustAnchorError {
+  /// A file exists but cannot be read.
+  AnchorUnreadable(path: String)
+  /// A file is not one PEM certificate or one P-256 EC private key.
+  AnchorCorrupt(path: String)
+  /// One of the two files is missing.
+  AnchorIncomplete(missing: String)
+  /// The key does not sign the certificate, or the certificate is not a
+  /// self-signed root carrying exactly the loopback constraints Hellhound mints.
+  AnchorMismatch
+  /// The root is outside its validity period.
+  AnchorExpired
+  /// The private key is readable by its group or by others.
+  AnchorKeyExposed(path: String)
+  /// The directory or a file could not be created or written.
+  AnchorWriteFailed(path: String)
+}
+
+/// Listen on this port of 127.0.0.1 instead of a free one, so the issuer
+/// (`https://localhost:<port>`) is the same on every run. 0, the default,
+/// lets the OS choose. `start` answers `PortInUse` when the port is taken.
+/// Only loopback is ever served.
+pub fn with_port(options: ProviderOptions, port: Int) -> ProviderOptions {
+  ProviderOptions(..options, port:)
+}
+
+/// Keep the provider's root in `directory` and reuse it on every start, so a
+/// developer trusts it once for a local run with a real browser. The caller
+/// chooses the directory; Hellhound picks no global location and never
+/// touches a system trust store.
+///
+/// On the first start, the directory (created owner-only if missing) receives
+/// `hellhound-root.pem`, the root to trust (`trust_anchor_file`), and
+/// `hellhound-root-key.pem`, its private key, written with mode 0600. Later
+/// starts load both and sign a new leaf for `localhost` and `127.0.0.1`. A
+/// corrupt, incomplete, mismatched, expired or group-readable anchor is a
+/// `TrustAnchorFailed` error, never a silent new root; `replace_trust_anchor`
+/// is the explicit way to mint one.
+///
+/// The root is a P-256 CA valid for 90 days, limited by critical X.509 name
+/// constraints to `localhost`, 127.0.0.1 and ::1 with path length 0, so a
+/// client that enforces name constraints refuses anything else it signs.
+/// Its key still sits on disk: trust it only on a developer machine, keep
+/// the directory out of version control, and never use this in a deployed
+/// environment. Without this option the provider keeps a fresh in-memory root
+/// per start. Verification, custody and production trust are unchanged: only
+/// a configuration that names this root trusts it.
+pub fn with_trust_anchor(
+  options: ProviderOptions,
+  directory: String,
+) -> ProviderOptions {
+  ProviderOptions(..options, trust_anchor: Some(directory))
+}
+
+/// The path of the root certificate kept in `directory`, the one file a
+/// developer adds to their trust store.
+pub fn trust_anchor_file(directory: String) -> String {
+  test_pki.certificate_file(directory)
+}
+
+/// Mint a new root in `directory` and overwrite the one kept there, for an
+/// expired or broken anchor. Every client and browser that trusted the old
+/// root must trust the new one.
+pub fn replace_trust_anchor(
+  directory: String,
+) -> Result(Nil, TrustAnchorError) {
+  test_pki.replace(directory) |> result.map_error(anchor_error)
+}
+
+/// Start a provider, reporting why it could not start. It is linked to the
+/// caller, so it ends with the process that started it; `stop_provider` ends
+/// it earlier.
+pub fn start(options: ProviderOptions) -> Result(Provider, StartError) {
+  use <- bool.guard(
+    options.port < 0 || options.port > 65_535,
+    Error(InvalidPort(options.port)),
   )
+  use pki <- result.try(case options.trust_anchor {
+    None -> test_pki.generate() |> result.replace_error(StartFailed)
+    Some(directory) ->
+      test_pki.anchored(directory)
+      |> result.map_error(fn(error) {
+        TrustAnchorFailed(directory, anchor_error(error))
+      })
+  })
   use started <- result.try(
     actor.new(initial_state(options))
     |> actor.on_message(fn(state, message) {
@@ -381,12 +523,21 @@ pub fn start_provider(options: ProviderOptions) -> Result(Provider, TestError) {
       actor.continue(change(state))
     })
     |> actor.start
-    |> result.replace_error(ProviderStartFailed),
+    |> result.replace_error(StartFailed),
   )
   let state = started.data
   use server <- result.try(
-    tls_server.start(pki, fn(request) { handle(state, request) })
-    |> result.replace_error(ProviderStartFailed),
+    tls_server.start_on(pki, options.port, fn(request) {
+      handle(state, request)
+    })
+    |> result.map_error(fn(error) {
+      process.unlink(started.pid)
+      process.kill(started.pid)
+      case error {
+        tls_server.AddressInUse -> PortInUse(options.port)
+        tls_server.ListenFailed -> StartFailed
+      }
+    }),
   )
   let issuer = "https://localhost:" <> int.to_string(server.port)
   transact(state, fn(s) { #(State(..s, issuer:), Nil) })
@@ -398,6 +549,27 @@ pub fn start_provider(options: ProviderOptions) -> Result(Provider, TestError) {
     state:,
     options:,
   ))
+}
+
+fn anchor_error(error: test_pki.AnchorError) -> TrustAnchorError {
+  case error {
+    test_pki.AnchorUnreadable(path) -> AnchorUnreadable(path)
+    test_pki.AnchorCorrupt(path) -> AnchorCorrupt(path)
+    test_pki.AnchorIncomplete(missing) -> AnchorIncomplete(missing)
+    test_pki.AnchorMismatch -> AnchorMismatch
+    test_pki.AnchorExpired -> AnchorExpired
+    test_pki.AnchorKeyExposed(path) -> AnchorKeyExposed(path)
+    test_pki.AnchorWriteFailed(path) -> AnchorWriteFailed(path)
+  }
+}
+
+/// Start a provider. It is linked to the caller, so it ends with the test
+/// that started it; `stop_provider` ends it earlier. Any failure is
+/// `ProviderStartFailed`; `start` reports the cause (`PortInUse`,
+/// `TrustAnchorFailed`, ...) for the `with_port` and `with_trust_anchor`
+/// options.
+pub fn start_provider(options: ProviderOptions) -> Result(Provider, TestError) {
+  start(options) |> result.replace_error(ProviderStartFailed)
 }
 
 pub fn stop_provider(provider: Provider) -> Nil {

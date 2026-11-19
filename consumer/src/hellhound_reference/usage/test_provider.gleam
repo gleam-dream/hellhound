@@ -11,6 +11,7 @@
 
 import gleam/dynamic/decode
 import gleam/http/request
+import gleam/int
 import gleam/json
 import gleam/option.{None, Some}
 import hellhound
@@ -102,4 +103,29 @@ pub fn run() -> Nil {
   assert hellhound.subject(hellhound.session_identity(ada)) == "ada"
   hellhound.stop(client)
   testing.stop_provider(provider)
+}
+
+/// A local run with a real browser: a fixed port keeps the issuer, and a
+/// root kept in a directory the application chooses is trusted once by the
+/// developer (`testing.trust_anchor_file`). For local development only.
+/// `start` reports why it could not start, such as a taken port or a broken
+/// anchor, which it never replaces silently.
+pub fn local_run(directory: String, port: Int) -> testing.Provider {
+  let options =
+    testing.provider_options()
+    |> testing.with_port(port)
+    |> testing.with_trust_anchor(directory)
+  case testing.start(options) {
+    Ok(provider) -> provider
+    Error(testing.PortInUse(port)) ->
+      panic as { "port " <> int.to_string(port) <> " is taken" }
+    Error(testing.TrustAnchorFailed(directory, _)) ->
+      panic as {
+        "fix or replace the anchor in "
+        <> directory
+        <> " (testing.replace_trust_anchor), then trust "
+        <> testing.trust_anchor_file(directory)
+      }
+    Error(_) -> panic as "the local provider did not start"
+  }
 }
