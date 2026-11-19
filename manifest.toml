@@ -49,6 +49,7 @@ http_gun = { version = ">= 0.1.0 and < 0.3.0" }
 jose = { version = "== 1.11.13" }
 kryptos = { version = ">= 1.5.0 and < 2.0.0" }
 oidcc = { version = "== 3.9.0" }
+simplifile = { version = ">= 2.7.0 and < 3.0.0" }
 sinal = { version = ">= 0.1.0 and < 0.2.0" }
 telemetry = { version = ">= 1.4.2 and < 2.0.0" }
 telemetry_registry = { version = "== 0.3.2" }

@@ -3,6 +3,10 @@
 //// `public_key:pkix_test_data/1`. OTP refuses a self-signed peer even when
 //// it is the configured anchor, so the leaf must be CA-issued. Nothing is
 //// written to disk.
+////
+//// `anchored` instead keeps a root constrained to loopback names in a
+//// caller-chosen directory, reuses it on later starts and signs a fresh leaf
+//// per start (`test_anchor`).
 
 import gleam/dict
 import gleam/dynamic.{type Dynamic}
@@ -11,6 +15,7 @@ import gleam/erlang/atom
 import gleam/erlang/charlist
 import gleam/list
 import gleam/result
+import hellhound/internal/test_anchor
 
 pub type Pki {
   Pki(
@@ -21,6 +26,29 @@ pub type Pki {
     certificate: BitArray,
     key: Dynamic,
   )
+}
+
+/// Why `anchored` produced no PKI.
+pub type AnchoredError {
+  /// The kept root cannot be used (`test_anchor`).
+  AnchorFailed(test_anchor.AnchorError)
+  /// The leaf could not be minted.
+  LeafFailed
+}
+
+/// The root kept in `directory`, created there on first use, and a leaf for
+/// `localhost` and `127.0.0.1` it signs now.
+pub fn anchored(directory: String) -> Result(Pki, AnchoredError) {
+  use root <- result.try(
+    test_anchor.load_or_create(directory) |> result.map_error(AnchorFailed),
+  )
+  use #(certificate, key) <- result.try(
+    test_anchor.leaf(root) |> result.replace_error(LeafFailed),
+  )
+  let a = atom.create
+  let der = test_anchor.root_der(root)
+  let ca_pem = pem_encode([#(a("Certificate"), der, a("not_encrypted"))])
+  Ok(Pki(ca_pem:, ca_der: der, certificate:, key:))
 }
 
 pub fn generate() -> Result(Pki, Nil) {

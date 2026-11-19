@@ -250,7 +250,9 @@ configuration alone supplies no introspection credentials.
 ## Examples and reference
 
 - [Usage modules](consumer/src/hellhound_reference/usage/): supervision, durable stores,
-  callback addresses, resource servers and a local HTTPS test provider.
+  callback addresses, resource servers and a local HTTPS test provider. For a local run
+  with a real browser, the test provider can keep a fixed port and a loopback-only root
+  the developer trusts once (`hellhound/testing`, development only).
 - [Relay integration](relay_consumer/src/recipe.gleam): JWT and introspection verifiers.
 - [PostgreSQL storage](integrations/hellhound_postgres/README.md): optional adapter;
   the core does not depend on it.
