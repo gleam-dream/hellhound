@@ -104,9 +104,12 @@
 ////   `certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "Hellhound local" -i .local/hellhound/hellhound-root.pem`.
 ////   Firefox keeps its own store (Settings, Certificates, Import).
 ////
-//// Browsers and OpenSSL enforce the name constraints. Erlang's `ssl` does not
-//// apply a trust anchor's own constraints, so an Erlang client that trusts
-//// this root is limited only by its hostname check.
+//// The name constraints limit only clients that enforce a trust anchor's own
+//// constraints. OpenSSL does, and the test suite checks it; Chrome documents
+//// enforcement for roots in its platform trust store (untested here); Safari
+//// and Firefox are untested. Erlang's `ssl` does not apply a trust anchor's
+//// own constraints, so an Erlang client that trusts this root is limited only
+//// by its hostname check.
 ////
 //// ## Access tokens
 ////
@@ -472,7 +475,8 @@ pub fn with_port(options: ProviderOptions, port: Int) -> ProviderOptions {
 ///
 /// The root is a P-256 CA valid for 90 days, limited by critical X.509 name
 /// constraints to `localhost`, 127.0.0.1 and ::1 with path length 0, so a
-/// client that enforces name constraints refuses anything else it signs.
+/// client that enforces a trust anchor's name constraints (OpenSSL, tested)
+/// refuses anything else it signs; see the module documentation.
 /// Its key still sits on disk: trust it only on a developer machine, keep
 /// the directory out of version control, and never use this in a deployed
 /// environment. Without this option the provider keeps a fresh in-memory root
