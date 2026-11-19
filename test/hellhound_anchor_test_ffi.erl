@@ -4,7 +4,7 @@
 -module(hellhound_anchor_test_ffi).
 -export([fresh_dir/0, mode/1, set_mode/2, write/2, read/1, delete/1,
          copy/2, root_shape/1, foreign_leaf_validation/1, expire/1,
-         os_process_roots/2, swap_scalar/1]).
+         os_process_roots/2, swap_scalar/1, resign/2]).
 
 -include_lib("public_key/include/public_key.hrl").
 -include_lib("kernel/include/file.hrl").
@@ -183,3 +183,62 @@ swap_scalar(Dir) ->
     ok = file:write_file(Path, public_key:pem_encode(
                                  [public_key:pem_entry_encode('ECPrivateKey', Swapped)])),
     nil.
+
+%% Re-sign the anchor's root with its own key after one change to its
+%% profile, as a hand-edited or foreign root would be.
+resign(Dir, Change) ->
+    {_, RootKey} = load(Dir),
+    {RootDer, _} = load(Dir),
+    #'OTPCertificate'{tbsCertificate = Tbs} = public_key:pkix_decode_cert(RootDer, otp),
+    Exts = Tbs#'OTPTBSCertificate'.extensions,
+    Changed = change(Change, Tbs, Exts),
+    Der = public_key:pkix_sign(Changed, RootKey),
+    ok = file:write_file(cert_path(Dir),
+                         public_key:pem_encode([{'Certificate', Der, not_encrypted}])),
+    nil.
+
+change(<<"no_extensions">>, Tbs, _) ->
+    Tbs#'OTPTBSCertificate'{extensions = asn1_NOVALUE};
+change(<<"digital_signature_usage">>, Tbs, Exts) ->
+    Tbs#'OTPTBSCertificate'{extensions = replace(Exts, ?'id-ce-keyUsage',
+        fun(E) -> E#'Extension'{extnValue = [digitalSignature]} end)};
+change(<<"non_critical_key_usage">>, Tbs, Exts) ->
+    Tbs#'OTPTBSCertificate'{extensions = replace(Exts, ?'id-ce-keyUsage',
+        fun(E) -> E#'Extension'{critical = false} end)};
+change(<<"no_key_usage">>, Tbs, Exts) ->
+    Tbs#'OTPTBSCertificate'{extensions =
+        lists:keydelete(?'id-ce-keyUsage', #'Extension'.extnID, Exts)};
+change(<<"non_critical_name_constraints">>, Tbs, Exts) ->
+    Tbs#'OTPTBSCertificate'{extensions = replace(Exts, ?'id-ce-nameConstraints',
+        fun(E) -> E#'Extension'{critical = false} end)};
+change(<<"wider_name_constraints">>, Tbs, Exts) ->
+    Tbs#'OTPTBSCertificate'{extensions = replace(Exts, ?'id-ce-nameConstraints',
+        fun(#'Extension'{extnValue = NC = #'NameConstraints'{permittedSubtrees = P}} = E) ->
+            Wider = #'GeneralSubtree'{base = {dNSName, "example.com"}, minimum = 0,
+                                      maximum = asn1_NOVALUE},
+            E#'Extension'{extnValue = NC#'NameConstraints'{permittedSubtrees = P ++ [Wider]}}
+        end)};
+change(<<"no_path_length">>, Tbs, Exts) ->
+    Tbs#'OTPTBSCertificate'{extensions = replace(Exts, ?'id-ce-basicConstraints',
+        fun(E) -> E#'Extension'{extnValue = #'BasicConstraints'{cA = true,
+                                    pathLenConstraint = asn1_NOVALUE}} end)};
+change(<<"extra_extension">>, Tbs, Exts) ->
+    Tbs#'OTPTBSCertificate'{extensions = Exts ++
+        [#'Extension'{extnID = ?'id-ce-extKeyUsage', critical = false,
+                      extnValue = [?'id-kp-serverAuth']}]};
+change(<<"duplicate_extension">>, Tbs, Exts) ->
+    Tbs#'OTPTBSCertificate'{extensions = Exts ++
+        [lists:keyfind(?'id-ce-keyUsage', #'Extension'.extnID, Exts)]};
+change(<<"long_validity">>, Tbs, _Exts) ->
+    #'Validity'{notBefore = From} = Tbs#'OTPTBSCertificate'.validity,
+    Tbs#'OTPTBSCertificate'{validity = #'Validity'{notBefore = From,
+        notAfter = utc(seconds(From) + 3650 * 86400)}};
+change(<<"sha384">>, Tbs, _Exts) ->
+    Tbs#'OTPTBSCertificate'{signature = #'SignatureAlgorithm'{
+        algorithm = ?'ecdsa-with-SHA384', parameters = asn1_NOVALUE}};
+change(<<"version_one">>, Tbs, _Exts) ->
+    Tbs#'OTPTBSCertificate'{version = v1, extensions = asn1_NOVALUE}.
+
+replace(Exts, Id, Fun) ->
+    lists:keyreplace(Id, #'Extension'.extnID, Exts,
+                     Fun(lists:keyfind(Id, #'Extension'.extnID, Exts))).

@@ -145,6 +145,15 @@ pub fn a_key_whose_scalar_does_not_match_its_point_is_a_mismatch_test() -> Nil {
   )
 }
 
+pub fn a_root_without_extensions_is_a_mismatch_not_a_crash_test() -> Nil {
+  let directory = created_anchor()
+  resign(directory, "no_extensions")
+  start_anchored(directory)
+  |> should.equal(
+    Error(testing.TrustAnchorFailed(directory, testing.AnchorMismatch)),
+  )
+}
+
 pub fn an_incomplete_anchor_is_an_error_test() -> Nil {
   let directory = created_anchor()
   let certificate = testing.trust_anchor_file(directory)
@@ -289,3 +298,6 @@ fn os_process_roots(directory: String, count: Int) -> List(String)
 
 @external(erlang, "hellhound_anchor_test_ffi", "swap_scalar")
 fn swap_scalar(directory: String) -> Nil
+
+@external(erlang, "hellhound_anchor_test_ffi", "resign")
+fn resign(directory: String, change: String) -> Nil

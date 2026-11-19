@@ -173,7 +173,7 @@ check(CertPath, CertPem, KeyPath, KeyPem) ->
         {error, _} -> {error, {anchor_corrupt, CertPath}};
         {_, error} -> {error, {anchor_corrupt, KeyPath}};
         {{ok, Der, Cert}, {ok, Key}} ->
-            case is_our_root(Der, Cert, Key) of
+            case is_our_root_safe(Der, Cert, Key) of
                 false -> {error, anchor_mismatch};
                 true ->
                     case is_current(Cert) of
@@ -202,6 +202,13 @@ decode_key(Pem) ->
     catch _:_ -> error
     end.
 
+%% A root this module did not mint can hold any well-formed certificate
+%% fields; none of them may escape `testing.start` as an exception.
+is_our_root_safe(Der, Cert, Key) ->
+    try is_our_root(Der, Cert, Key)
+    catch _:_ -> false
+    end.
+
 %% The key signs the certificate, and the certificate is a self-signed root
 %% with exactly the loopback constraints this module mints. The public point
 %% is derived from the private scalar, which is what signs leaves; the point
@@ -213,7 +220,8 @@ is_our_root(Der, #'OTPCertificate'{tbsCertificate = Tbs},
     Point = derived_point(Key),
     case Point =:= Stored andalso Spki of
         #'OTPSubjectPublicKeyInfo'{subjectPublicKey = #'ECPoint'{point = Point}} ->
-            Issuer =:= Subject
+            is_list(Exts)
+                andalso Issuer =:= Subject
                 andalso public_key:pkix_verify(Der, {#'ECPoint'{point = Point},
                                                      {namedCurve, ?secp256r1}})
                 andalso lists:member(name_constraints(), Exts)
