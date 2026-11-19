@@ -442,6 +442,9 @@ pub type TrustAnchorError {
   AnchorCorrupt(path: String)
   /// One of the two files is missing.
   AnchorIncomplete(missing: String)
+  /// An anchor path is a symbolic link (live or dangling) or another kind of
+  /// entry than a regular file. Links are never followed for the key.
+  AnchorNotRegularFile(path: String)
   /// The key's private scalar does not match the root, or the root is not
   /// exactly what Hellhound mints: version 3, ECDSA P-256 with SHA-256,
   /// self-issued, at most 90 days, and only its basic constraints, key usage,
@@ -478,7 +481,8 @@ pub fn with_port(options: ProviderOptions, port: Int) -> ProviderOptions {
 /// written in an owner-only staging directory and renamed into place, so no
 /// other user can open the key even in a directory they can traverse. Later
 /// starts load both and sign a new leaf for `localhost` and `127.0.0.1`. A
-/// corrupt, incomplete, mismatched, expired or group-readable anchor is a
+/// corrupt, incomplete, mismatched, expired or group-readable anchor, or a
+/// symbolic link at either path (links are never followed), is a
 /// `TrustAnchorFailed` error, never a silent new root; `replace_trust_anchor`
 /// is the explicit way to mint one. Starts in several processes or worktrees
 /// may share the directory: a lock made with `mkdir`, exclusive across
@@ -576,6 +580,7 @@ fn anchor_error(error: test_anchor.AnchorError) -> TrustAnchorError {
     test_anchor.AnchorUnreadable(path) -> AnchorUnreadable(path)
     test_anchor.AnchorCorrupt(path) -> AnchorCorrupt(path)
     test_anchor.AnchorIncomplete(missing) -> AnchorIncomplete(missing)
+    test_anchor.AnchorNotRegularFile(path) -> AnchorNotRegularFile(path)
     test_anchor.AnchorMismatch -> AnchorMismatch
     test_anchor.AnchorExpired -> AnchorExpired
     test_anchor.AnchorKeyExposed(path) -> AnchorKeyExposed(path)

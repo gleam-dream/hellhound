@@ -57,6 +57,7 @@ pub type AnchorError {
   AnchorUnreadable(path: String)
   AnchorCorrupt(path: String)
   AnchorIncomplete(missing: String)
+  AnchorNotRegularFile(path: String)
   AnchorMismatch
   AnchorExpired
   AnchorKeyExposed(path: String)
@@ -123,7 +124,9 @@ pub fn load_or_create(directory: String) -> Result(Root, AnchorError) {
   use lock <- with_lock(directory)
   let certificate = certificate_file(directory)
   let key = key_file(directory)
-  case exists(certificate), exists(key) {
+  use certificate_present <- result.try(entry(certificate))
+  use key_present <- result.try(entry(key))
+  case certificate_present, key_present {
     False, False -> create(directory, lock)
     True, True -> load(certificate, key)
     True, False -> Error(AnchorIncomplete(key))
@@ -184,6 +187,22 @@ fn create_observing(
     observe,
   ))
   Ok(Root(der:, key:))
+}
+
+/// Whether an anchor path holds a regular file, without following a link:
+/// absent is `Ok(False)`; a symbolic link, live or dangling, or any other kind
+/// of entry is refused, so a link can neither stand in for the key nor read
+/// as absent and be minted over.
+fn entry(path: String) -> Result(Bool, AnchorError) {
+  case simplifile.link_info(path) {
+    Error(simplifile.Enoent) -> Ok(False)
+    Error(_) -> Error(AnchorUnreadable(path))
+    Ok(info) ->
+      case simplifile.file_info_type(info) {
+        simplifile.File -> Ok(True)
+        _ -> Error(AnchorNotRegularFile(path))
+      }
+  }
 }
 
 fn exists(path: String) -> Bool {

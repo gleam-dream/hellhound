@@ -302,6 +302,61 @@ fn receive_all(subject: process.Subject(a), acc: List(a)) -> List(a) {
   }
 }
 
+pub fn dangling_links_at_the_anchor_paths_are_refused_test() -> Nil {
+  let directory = fresh_dir()
+  let assert Ok(Nil) = simplifile.create_directory(directory)
+  let certificate = testing.trust_anchor_file(directory)
+  let assert Ok(Nil) =
+    simplifile.create_symlink("missing-root.pem", certificate)
+  let assert Ok(Nil) =
+    simplifile.create_symlink("missing-key.pem", key_path(directory))
+  start_anchored(directory)
+  |> should.equal(
+    Error(testing.TrustAnchorFailed(
+      directory,
+      testing.AnchorNotRegularFile(certificate),
+    )),
+  )
+  // Nothing was minted over them.
+  let assert Ok(True) = simplifile.is_symlink(certificate)
+  let assert Ok(True) = simplifile.is_symlink(key_path(directory))
+  Nil
+}
+
+pub fn live_links_at_the_anchor_paths_are_refused_test() -> Nil {
+  let source = created_anchor()
+  let assert Ok(here) = simplifile.current_directory()
+  let directory = fresh_dir()
+  let assert Ok(Nil) = simplifile.create_directory(directory)
+  let assert Ok(Nil) =
+    simplifile.create_symlink(
+      here <> "/" <> testing.trust_anchor_file(source),
+      testing.trust_anchor_file(directory),
+    )
+  let assert Ok(Nil) =
+    simplifile.create_symlink(
+      here <> "/" <> key_path(source),
+      key_path(directory),
+    )
+  start_anchored(directory)
+  |> should.equal(
+    Error(testing.TrustAnchorFailed(
+      directory,
+      testing.AnchorNotRegularFile(testing.trust_anchor_file(directory)),
+    )),
+  )
+  // A real certificate beside a linked key is refused at the key.
+  delete(testing.trust_anchor_file(directory))
+  copy(testing.trust_anchor_file(source), testing.trust_anchor_file(directory))
+  start_anchored(directory)
+  |> should.equal(
+    Error(testing.TrustAnchorFailed(
+      directory,
+      testing.AnchorNotRegularFile(key_path(directory)),
+    )),
+  )
+}
+
 fn start_anchored(
   directory: String,
 ) -> Result(testing.Provider, testing.StartError) {
