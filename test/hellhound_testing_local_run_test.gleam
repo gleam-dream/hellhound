@@ -2,6 +2,8 @@
 //// root a developer trusts once, reused from a caller-chosen directory.
 
 import exception
+import gleam/bit_array
+import gleam/crypto
 import gleam/erlang/process
 import gleam/http/request
 import gleam/int
@@ -11,6 +13,7 @@ import gleam/string
 import gleeunit/should
 import hellhound
 import hellhound/testing
+import simplifile
 
 pub fn default_start_keeps_a_random_port_and_a_fresh_root_test() -> Nil {
   let assert Ok(first) = testing.start(testing.provider_options())
@@ -282,26 +285,42 @@ fn free_port() -> Int {
   port
 }
 
-@external(erlang, "hellhound_anchor_test_ffi", "fresh_dir")
-fn fresh_dir() -> String
+/// A directory path under `build/anchor-tests` that does not exist yet.
+fn fresh_dir() -> String {
+  let assert Ok(Nil) = simplifile.create_directory_all("build/anchor-tests")
+  "build/anchor-tests/"
+  <> bit_array.base16_encode(crypto.strong_random_bytes(8))
+}
 
-@external(erlang, "hellhound_anchor_test_ffi", "mode")
-fn mode(path: String) -> Int
+fn mode(path: String) -> Int {
+  let assert Ok(info) = simplifile.file_info(path)
+  simplifile.file_info_permissions_octal(info)
+}
 
-@external(erlang, "hellhound_anchor_test_ffi", "set_mode")
-fn set_mode(path: String, mode: Int) -> Nil
+fn set_mode(path: String, mode: Int) -> Nil {
+  let assert Ok(Nil) = simplifile.set_permissions_octal(path, mode)
+  Nil
+}
 
-@external(erlang, "hellhound_anchor_test_ffi", "write")
-fn write(path: String, contents: String) -> Nil
+fn write(path: String, contents: String) -> Nil {
+  let assert Ok(Nil) = simplifile.write(path, contents)
+  Nil
+}
 
-@external(erlang, "hellhound_anchor_test_ffi", "read")
-fn read(path: String) -> String
+fn read(path: String) -> String {
+  let assert Ok(contents) = simplifile.read(path)
+  contents
+}
 
-@external(erlang, "hellhound_anchor_test_ffi", "delete")
-fn delete(path: String) -> Nil
+fn delete(path: String) -> Nil {
+  let assert Ok(Nil) = simplifile.delete(path)
+  Nil
+}
 
-@external(erlang, "hellhound_anchor_test_ffi", "copy")
-fn copy(from: String, to: String) -> Nil
+fn copy(from: String, to: String) -> Nil {
+  let assert Ok(Nil) = simplifile.copy_file(from, to)
+  Nil
+}
 
 @external(erlang, "hellhound_anchor_test_ffi", "root_shape")
 fn root_shape(pem: String) -> #(List(String), Bool, Int, Int, List(String))

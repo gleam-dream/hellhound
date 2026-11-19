@@ -1,44 +1,11 @@
-%% Test-only helpers for the reusable local trust anchor: temporary
-%% directories, file modes, and independent inspection of the root with OTP's
-%% own public_key.
+%% Test-only helpers for the reusable local trust anchor that need OTP's own
+%% public_key: independent inspection of the root, forged and re-signed roots
+%% and keys, and separate OS processes. File work is in the Gleam test.
 -module(hellhound_anchor_test_ffi).
--export([fresh_dir/0, mode/1, set_mode/2, write/2, read/1, delete/1,
-         copy/2, root_shape/1, foreign_leaf_validation/1, expire/1,
+-export([root_shape/1, foreign_leaf_validation/1, expire/1,
          os_process_roots/2, swap_scalar/1, resign/2]).
 
 -include_lib("public_key/include/public_key.hrl").
--include_lib("kernel/include/file.hrl").
-
-fresh_dir() ->
-    Suffix = binary:encode_hex(crypto:strong_rand_bytes(8)),
-    Dir = filename:join([<<"build">>, <<"anchor-tests">>, Suffix]),
-    %% Creates Dir's parent only; Dir itself does not exist yet.
-    ok = filelib:ensure_dir(Dir),
-    Dir.
-
-mode(Path) ->
-    {ok, Info} = file:read_file_info(Path),
-    Info#file_info.mode band 8#777.
-
-set_mode(Path, Mode) ->
-    ok = file:change_mode(Path, Mode),
-    nil.
-
-write(Path, Bin) ->
-    ok = file:write_file(Path, Bin),
-    nil.
-
-read(Path) ->
-    {ok, Bin} = file:read_file(Path),
-    Bin.
-
-delete(Path) ->
-    ok = file:delete(Path),
-    nil.
-
-copy(From, To) ->
-    {ok, _} = file:copy(From, To),
-    nil.
 
 %% {Permitted names, CA flag, path length, validity seconds, key usage}
 root_shape(Pem) ->
