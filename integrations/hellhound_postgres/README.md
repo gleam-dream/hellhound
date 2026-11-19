@@ -16,7 +16,7 @@ Add Hellhound and Pog from Hex and the PostgreSQL adapter from its Git subdirect
 [dependencies]
 hellhound = ">= 0.1.0 and < 0.3.0"
 pog = ">= 4.1.0 and < 4.2.0"
-hellhound_postgres = { git = "https://github.com/gleam-dream/hellhound.git", ref = "main", path = "integrations/hellhound_postgres" }
+hellhound_postgres = { git = "https://github.com/gleam-dream/hellhound.git", ref = "hellhound_postgres-v0.1.0", path = "integrations/hellhound_postgres" }
 ```
 
 Commit `gleam.toml` and `manifest.toml` to retain the resolved versions and Git commit.
