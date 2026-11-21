@@ -8,10 +8,11 @@ gleam_stdlib = ">= 0.70.0 and < 2.0.0"
 gleam_erlang = ">= 1.0.0 and < 2.0.0"
 gleam_time = ">= 1.11.0 and < 2.0.0"
 hellhound = { path = ".." }
-# Floor for the transitive Relay dependency: json_blueprint 2.1.1 keeps
-# combinator codecs from multiplying when copied between processes.
-json_blueprint = ">= 2.1.1 and < 3.0.0"
-relay = ">= 0.2.0 and < 0.3.0"
+# Floor for the transitive Relay dependency: from json_blueprint 2.2.0 a
+# codec copies between processes at about its own size.
+json_blueprint = ">= 2.2.0 and < 3.0.0"
+# Relay 0.2.2 holds the server once instead of copying it per request.
+relay = ">= 0.2.2 and < 0.3.0"
 sinal = ">= 0.1.0 and < 0.2.0"
 
 [dev-dependencies]
