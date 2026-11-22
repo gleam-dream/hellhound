@@ -435,6 +435,17 @@ reviews:
           warnings as errors, scripts/erlang-check or the behavior tests.
         - Flag a benchmark number turned into a gate (ADR 0017).
 
+    - path: ".github/workflows/pr-title.yml"
+      instructions: |
+        Pull request title check (gate).
+        - Its types, patterns, action pin, triggers and permissions come from
+          a title rule shared across repositories. Flag any change to them, so
+          the owner can confirm it matches that rule.
+        - It is the one convention CI checks, so do not flag it as a
+          convention turned into a check.
+        - Its tool is the pinned action in place of a flake tool, because the
+          title exists on the pull request and never in a checkout.
+
   pre_merge_checks:
     title:
       mode: "off"
