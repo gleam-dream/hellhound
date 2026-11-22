@@ -438,9 +438,9 @@ reviews:
     - path: ".github/workflows/pr-title.yml"
       instructions: |
         Pull request title check (gate).
-        - This file mirrors the shared title workflow. Flag a change that
-          makes it differ from the shared copy: types, patterns, action pin,
-          triggers or permissions.
+        - Its types, patterns, action pin, triggers and permissions come from
+          a title rule shared across repositories. Flag any change to them, so
+          the owner can confirm it matches that rule.
         - It is the one convention CI checks, so do not flag it as a
           convention turned into a check.
         - Its tool is the pinned action in place of a flake tool, because the
