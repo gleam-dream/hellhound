@@ -63,9 +63,8 @@ reviews:
     base_branches:
       - main
 
-  # Generated, vendored, rendered and recorded output. relay_consumer's recipe
-  # is generated from README.md by scripts/relay-recipe, and the oidcc records
-  # are vendored verbatim; review their sources instead.
+  # Generated, vendored, rendered and recorded output. The oidcc records are
+  # vendored verbatim; review their source instead.
   path_filters:
     - "!flake.lock"
     - "!consumer/browser/package-lock.json"
@@ -73,7 +72,6 @@ reviews:
     - "!docs/design/design-layer.pdf"
     - "!docs/evidence/releases/**"
     - "!test/integration/oidcc_records.hrl"
-    - "!relay_consumer/src/recipe.gleam"
 
   path_instructions:
     - path: "{src,consumer/src,integrations/*/src}/**"
@@ -117,7 +115,7 @@ reviews:
           tests or scripts/check decide, and no layout or naming preference
           without a written rule.
 
-    - path: "{src,test,consumer,relay_consumer/test,integrations/*/src,integrations/*/test}/**/*.gleam"
+    - path: "{src,test,consumer,relay_consumer,integrations/*/src,integrations/*/test}/**/*.gleam"
       instructions: |
         Gleam (gleam).
         - Flag a module function, private included, without annotated
@@ -257,9 +255,12 @@ reviews:
           `Recover` handled with a fresh token exchange instead of
           `recover_custody` or `recover_refresh`.
         - Flag `ProviderNotReady` unhandled where discovery is supervised.
-        - Flag an outgoing request authorized without restoring the session
-          and calling `access_token`, and a resource POST repeated after a 401
-          because refresh succeeded.
+        - Flag an outgoing request made for a signed-in user that is
+          authorized without restoring the session and calling
+          `access_token`, and a resource POST repeated after a 401 because
+          refresh succeeded. Service and signed-assertion exchanges
+          (`hellhound/exchange`, `hellhound/assertion`) have no user session
+          and are outside this rule.
         - Flag a client made per request instead of once per configuration
           at setup.
         - Flag durable stores configured without a stable sealing key.
@@ -323,17 +324,20 @@ reviews:
           the browser.
         - Flag cookie decoding, sign-in, origin checks and resource permission
           merged into one decision, and a signed cookie treated as permission.
-        - Flag a GET or HEAD route that mutates state.
+        - Flag a GET or HEAD route that makes a business mutation. Starting
+          a login and the query-mode callback that `complete_login` handles
+          are protocol steps the design routes through GET, not business
+          mutations.
         - Flag a redirect to an unvalidated destination, and untrusted text
           put into HTML unescaped.
         - Flag a handler passed to `mist.start` that captures a large term (a
           catalog, codec set or route table); Mist 6.0.3 copies it into every
           connection. Build it once at start and reach it from the handler.
 
-    - path: "{README.md,relay_consumer/test/**/*.gleam}"
+    - path: "relay_consumer/{src,test}/**/*.gleam"
       instructions: |
-        Relay recipe (relay; relay 0.2.2). Apply to the README's Relay
-        verifier recipe and its tests.
+        Relay recipe (relay; relay 0.2.2). Apply to the Relay verifier recipe
+        and its tests.
         - Flag the verifier deciding business permission; it checks the
           bearer token, and the application authorizes the operation.
         - Flag correlation or client-supplied keys treated as trusted
@@ -465,19 +469,23 @@ reviews:
       - name: Breaking change is declared
         mode: warning
         instructions: |
-          Source: policy, gleam-lib. Warn if the diff removes or changes an
-          exported function, type, constructor, field or module path in a
-          module outside `hellhound/internal`, or in hellhound_postgres, and
-          the pull request description does not call the change breaking and
-          give its migration. Pass otherwise.
+          Source: policy, gleam-lib. Consider only the published library
+          source: src/ outside `hellhound/internal`, and
+          integrations/hellhound_postgres/src. Warn if the diff removes or
+          changes an exported function, type, constructor, field or module
+          path in that source, and the pull request description does not call
+          the change breaking and give its migration. Pass for changes to
+          tests, the consumers and other files.
       - name: Public API change reaches the consumer
         mode: warning
         instructions: |
-          Source: gleam-lib, AGENTS.md. Warn if the diff adds, removes or
-          changes an exported function, type, constructor or field in a
-          module outside `hellhound/internal` and changes nothing under
-          consumer/src, and the pull request description does not say why no
-          usage topic covers it. Pass otherwise.
+          Source: gleam-lib, AGENTS.md. Consider only the published library
+          source: src/ outside `hellhound/internal`, and
+          integrations/hellhound_postgres/src. Warn if the diff adds, removes
+          or changes an exported function, type, constructor or field in that
+          source and changes nothing under consumer/src, and the pull request
+          description does not say why no usage topic covers it. Pass for
+          changes to tests, the consumers and other files.
       - name: Problem-first description
         mode: warning
         instructions: |
