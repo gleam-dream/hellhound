@@ -290,8 +290,11 @@ reviews:
           idempotent.
         - Flag a destination view that widens authority, loopback enabled
           outside the test provider, and disabled or weakened TLS
-          verification; a provider that accepts only TLS 1.2 CBC suites takes
-          `config.with_cipher_suites(settings, config.OtpDefaultsAndTls12Cbc)`.
+          verification. `config.with_cipher_suites(settings,
+          config.OtpDefaultsAndTls12Cbc)` adds only the TLS 1.2 ECDHE AES-CBC
+          suites with an HMAC-SHA-256 or HMAC-SHA-384 MAC; a provider that
+          accepts only those takes it, and one outside that subset has no
+          matching suite.
         - Flag a shared client started by a short-lived request process.
 
     - path: "{src,consumer/src}/**/*.gleam"
