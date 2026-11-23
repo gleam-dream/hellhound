@@ -5,23 +5,15 @@
 # of coderabbit-config itself, and `repository` marks a rule beyond the catalog.
 #
 # Catalogs read:
-#   practice skills    879841a61c3f83cd809edca9229c4a6bb7f909f8
-#   gleam-agent-tools  6a9ea2f647e787a32d3c7fa88d9c58c5b81ae9d7
+#   practice catalog (not public)  a56636a4eed7a0d644b89f5bb7c7d7c9692e0887
+#   gleam-agent-tools  d7b541cb885b3edbf25563b06aee97b28b66074f
 #
 # Governing skills: coderabbit-config (policy), gleam, gleam-lib, gleam-ffi,
 # gleam-otp, hellhound, http-gun, sinal, wisp, relay, gleam-sql, testing,
 # python, design, tracker, gate, git.
 #
-# Governing dependency versions: hellhound 0.2.3 (this package, gleam.toml; the
-# hellhound skill names 0.1.0, and every API its rules cite exists in 0.2.3).
-# Locked in manifest.toml: http_gun 0.2.0, sinal 0.1.0, gleam_otp 1.3.0,
-# gleam_erlang 1.3.0, gleam_stdlib 1.0.5, gose 2.2.0, kryptos 1.5.0,
-# gleeunit 1.11.0; test-only oracles oidcc 3.9.0, jose 1.11.13.
-# consumer/manifest.toml: wisp 2.2.2, mist 6.0.3 (the wisp skill's Mist rule is
-# stated for 6.0.3). relay_consumer/manifest.toml: relay 0.2.2,
-# json_blueprint 2.2.0 (json_blueprint is imported by no Hellhound source, so
-# the json-blueprint skill does not govern). integrations/hellhound_postgres/
-# manifest.toml: pog 4.1.0, hellhound 0.2.2 (Hex).
+# json_blueprint is imported by no Hellhound source, so the json-blueprint
+# skill does not govern.
 # The Node fixtures and browser journey (`*.mjs`) have no governing catalog
 # skill; only the review policy applies to them.
 language: en-US
@@ -197,8 +189,8 @@ reviews:
 
     - path: "{src,consumer/src,integrations/*/src}/**/*.gleam"
       instructions: |
-        Processes (gleam-otp; gleam_otp 1.3.0, gleam_erlang 1.3.0). Apply to a
-        module that imports `gleam/otp` or `gleam/erlang/process`.
+        Processes (gleam-otp). Apply to a module that imports `gleam/otp` or
+        `gleam/erlang/process`.
         - Flag an actor whose messages are not one explicit message type, and
           request/reply mechanics exposed instead of hidden behind public
           functions.
@@ -237,6 +229,8 @@ reviews:
           caller must pass back.
         - Flag `stop` documented or treated as proof that every worker and
           external effect finished.
+        - Flag `exchange.perform` sending more than one request or retrying;
+          the application owns reuse, expiry and retries.
 
     - path: "{consumer/src/**/*.gleam,README.md}"
       instructions: |
@@ -264,6 +258,9 @@ reviews:
         - Flag a client made per request instead of once per configuration
           at setup.
         - Flag durable stores configured without a stable sealing key.
+        - Flag `exchange.perform` called on a client not started with
+          `exchange.supervised`, and a signing JWK for `hellhound/assertion`
+          that carries an unused `alg` or `kid`.
 
     - path: "integrations/*/src/**/*.gleam"
       instructions: |
@@ -279,8 +276,7 @@ reviews:
 
     - path: "src/**/*.gleam"
       instructions: |
-        HTTP Gun (http-gun; http_gun 0.2.0). Apply to a module that imports
-        `http_gun`.
+        HTTP Gun (http-gun). Apply to a module that imports `http_gun`.
         - Flag a decoded provider response with no check of `status` first;
           an `Ok` transport result can hold a 404 or 503.
         - Flag a truncated collection decoded as a complete JSON document,
@@ -293,13 +289,17 @@ reviews:
           request's real semantics; a token or refresh exchange is not
           idempotent.
         - Flag a destination view that widens authority, loopback enabled
-          outside the test provider, and disabled TLS verification.
+          outside the test provider, and disabled or weakened TLS
+          verification. `config.with_cipher_suites(settings,
+          config.OtpDefaultsAndTls12Cbc)` adds only the TLS 1.2 ECDHE AES-CBC
+          suites with an HMAC-SHA-256 or HMAC-SHA-384 MAC; a provider that
+          accepts only those takes it, and one outside that subset has no
+          matching suite.
         - Flag a shared client started by a short-lived request process.
 
     - path: "{src,consumer/src}/**/*.gleam"
       instructions: |
-        Telemetry (sinal; sinal 0.1.0). Apply to a module that imports
-        `sinal`.
+        Telemetry (sinal). Apply to a module that imports `sinal`.
         - Flag an event name, field key or route prefix built from run-time
           input; they become atoms. Unbounded values go in metadata values.
         - Flag an event defined twice instead of one definition shared by
@@ -314,7 +314,7 @@ reviews:
 
     - path: "consumer/src/**/*.gleam"
       instructions: |
-        HTTP handlers (wisp; wisp 2.2.2, mist 6.0.3).
+        HTTP handlers (wisp).
         - Flag domain or permission decisions made in a handler or middleware
           instead of an application function it calls.
         - Flag a request body read twice, and a later handler that does not
@@ -331,12 +331,12 @@ reviews:
         - Flag a redirect to an unvalidated destination, and untrusted text
           put into HTML unescaped.
         - Flag a handler passed to `mist.start` that captures a large term (a
-          catalog, codec set or route table); Mist 6.0.3 copies it into every
+          catalog, codec set or route table); Mist copies it into every
           connection. Build it once at start and reach it from the handler.
 
     - path: "relay_consumer/{src,test}/**/*.gleam"
       instructions: |
-        Relay recipe (relay; relay 0.2.2). Apply to the Relay verifier recipe
+        Relay recipe (relay). Apply to the Relay verifier recipe
         and its tests.
         - Flag the verifier deciding business permission; it checks the
           bearer token, and the application authorizes the operation.
@@ -345,7 +345,7 @@ reviews:
 
     - path: "integrations/*/src/**/*.gleam"
       instructions: |
-        PostgreSQL access (gleam-sql; pog 4.1.0).
+        PostgreSQL access (gleam-sql).
         - Flag a value interpolated into SQL text instead of bound as a
           parameter, and an identifier (the schema name) that is not fixed by
           trusted configuration.
