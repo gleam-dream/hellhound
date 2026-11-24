@@ -2374,7 +2374,9 @@ pub fn current_issued_at(current: Current) -> Timestamp {
 /// role removed at the provider is denied within the bound only if the
 /// provider evaluates claims again on refresh; check that for your provider.
 /// The session needs a refresh token. The call takes at most the refresh
-/// wait plus the request timeout. To renew regardless of age, call
+/// wait plus the request timeout, plus the store timeout for each of its
+/// custody calls: the read, the reservation, and the settlement or
+/// publication. To renew regardless of age, call
 /// `refresh` with a session read in this request.
 pub fn current_identity(
   client: Client,
@@ -2478,6 +2480,9 @@ fn verdict(
   result: Result(Current, SessionError),
 ) -> provider.Verdict {
   case renewal.dispatched, result {
+    // The store did not confirm the settlement, and the provider's fault
+    // is still the provider's.
+    _, _ if renewal.unsettled_fault -> provider.Faulted
     False, _ -> provider.NothingLearned
     // The outcome is unknown, or the provider asked this node to slow down.
     True, Error(RefreshQuarantined(ProviderOutcomeUnknown))
@@ -2539,6 +2544,10 @@ type Renewal {
     /// Whether this attempt held the reservation and called the provider
     /// client, as opposed to waiting, joining or being refused a reservation.
     dispatched: Bool,
+    /// The provider's outcome was unknown, or it rate-limited, and custody
+    /// did not confirm the settlement, so `result` reports the store. The
+    /// renewal circuit still has to hear of the provider.
+    unsettled_fault: Bool,
   )
 }
 
@@ -2547,7 +2556,13 @@ fn undispatched(
   result: Result(Access, SessionError),
   outcome: Option(telemetry.RefreshOutcome),
 ) -> Renewal {
-  Renewal(result:, outcome:, claims: telemetry.NotReturned, dispatched: False)
+  Renewal(
+    result:,
+    outcome:,
+    claims: telemetry.NotReturned,
+    dispatched: False,
+    unsettled_fault: False,
+  )
 }
 
 /// Refresh from `snapshot`. `usable`: the current token has not expired, so
@@ -2673,7 +2688,13 @@ fn dispatch_refresh(client: Client, dispatch: custody.Dispatch) -> Renewal {
   let outcome =
     native.refresh(client.backend, refresh_token: dispatch.refresh_token)
   let dispatched = fn(result, outcome, claims) {
-    Renewal(result:, outcome:, claims:, dispatched: True)
+    Renewal(
+      result:,
+      outcome:,
+      claims:,
+      dispatched: True,
+      unsettled_fault: False,
+    )
   }
   let settle = fn(settlement, error, event) {
     case
@@ -2687,10 +2708,16 @@ fn dispatch_refresh(client: Client, dispatch: custody.Dispatch) -> Renewal {
       True -> dispatched(Error(error), Some(event), telemetry.NotReturned)
       // Unsettled: the lease will run out and quarantine the generation.
       False ->
-        dispatched(
-          Error(SessionStoreUnavailable),
-          Some(telemetry.RefreshUnavailable),
-          telemetry.NotReturned,
+        Renewal(
+          result: Error(SessionStoreUnavailable),
+          outcome: Some(telemetry.RefreshUnavailable),
+          claims: telemetry.NotReturned,
+          dispatched: True,
+          unsettled_fault: case error {
+            RefreshQuarantined(ProviderOutcomeUnknown) | RefreshRateLimited ->
+              True
+            _ -> False
+          },
         )
     }
   }

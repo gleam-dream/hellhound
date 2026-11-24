@@ -759,15 +759,18 @@ pub fn refresh_keys(provider: Provider) -> Result(Snapshot, Failure) {
 
 /// Ask to start a refresh made only to renew claims. `Paused` while the
 /// renewal circuit is open or its probe is in flight. `lease_ms` is how long
-/// a probe may take before it is taken as lost. A cache that does not answer
+/// a probe may take before it is taken as lost. A cache that is not running
 /// admits the renewal: the refresh then fails as not ready, and nothing is
-/// sent. Report every admitted renewal with `renewal_reported`.
+/// sent. A cache that is running and did not answer in time may have its
+/// circuit open, so that renewal is paused. Report every admitted renewal
+/// with `renewal_reported`.
 pub fn admit_renewal(provider: Provider, lease_ms: Int) -> Admission {
   case
     call.call(provider.subject, provider.timeout, RenewalAdmission(lease_ms, _))
   {
     Ok(admission) -> admission
-    Error(_) -> Admitted
+    Error(call.CalleeDown) -> Admitted
+    Error(call.CallTimedOut) -> Paused
   }
 }
 

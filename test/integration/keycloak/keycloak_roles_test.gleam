@@ -9,6 +9,7 @@
 //// roles into the ID token as `roles`. The test grants the role first and
 //// again at the end, so it can be repeated.
 
+import exception
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http/request
@@ -66,6 +67,12 @@ pub fn a_removed_realm_role_is_gone_after_the_claims_renew_test() {
   support.keycloak_realm_role("carol", "approver", support.Grant)
   let clock = support.clock_new(support.now_seconds())
   let client = start(clock)
+  // The realm is shared by the suite: give the role back and stop the
+  // client even when an assertion below fails.
+  use <- exception.defer(fn() {
+    support.keycloak_realm_role("carol", "approver", support.Grant)
+    hellhound.stop(client)
+  })
   let session = sign_in(client)
   // The smallest bound the constructor accepts.
   let assert Ok(age) = hellhound.claims_age(client, duration.seconds(60))
@@ -125,7 +132,4 @@ pub fn a_removed_realm_role_is_gone_after_the_claims_renew_test() {
   assert hellhound.subject(claims) == hellhound.subject(login)
   // The rest of the profile survived the replacement.
   assert hellhound.email(claims) == Some("carol@example.test")
-
-  support.keycloak_realm_role("carol", "approver", support.Grant)
-  hellhound.stop(client)
 }

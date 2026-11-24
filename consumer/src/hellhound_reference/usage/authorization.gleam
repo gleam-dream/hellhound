@@ -79,17 +79,18 @@ fn denied(
   case hellhound.session_error_action(error), error {
     // Publication was not confirmed. Recover it, without another provider
     // call; the next request reads the renewed claims.
-    hellhound.Recover, hellhound.RefreshUnconfirmed(recovery) -> {
-      let _ = hellhound.recover_refresh(client, recovery)
-      TryAgainLater
-    }
+    hellhound.Recover, hellhound.RefreshUnconfirmed(recovery) ->
+      recover(client, recovery, 3)
     hellhound.Recover, _ | hellhound.RetryLater, _ -> TryAgainLater
     // The session cannot be used again (its refresh token is revoked or
     // quarantined, or it is gone): end it before redirecting.
-    hellhound.Reauthenticate, _ -> {
-      let _ = hellhound.logout(client, session, hellhound.default_logout())
-      SignInAgain
-    }
+    hellhound.Reauthenticate, _ ->
+      case hellhound.logout(client, session, hellhound.default_logout()) {
+        // Custody did not confirm the removal, so the session may still
+        // exist: the next request ends it.
+        Error(hellhound.LogoutStoreUnavailable) -> TryAgainLater
+        _ -> SignInAgain
+      }
     // The provider returns no ID token on refresh, so no refresh can renew
     // the claims. This is the application's choice. Denying keeps the
     // session and makes the fault visible until an operator fixes the
@@ -99,6 +100,22 @@ fn denied(
       hellhound.ClaimsNotRenewed(hellhound.NotReturned)
     -> Misconfigured
     hellhound.FixConfiguration, _ | hellhound.RejectRequest, _ -> Misconfigured
+  }
+}
+
+/// Until custody confirms the publication, the refreshed tokens exist only
+/// in the recovery value. Each unconfirmed attempt returns the value to pass
+/// to the next one. A request cannot hold it for ever, so this stops after a
+/// few attempts; an application that can keep the value longer should.
+fn recover(
+  client: hellhound.Client,
+  recovery: hellhound.RefreshRecovery,
+  attempts: Int,
+) -> Decision {
+  case hellhound.recover_refresh(client, recovery) {
+    Error(hellhound.RefreshUnconfirmed(next)) if attempts > 1 ->
+      recover(client, next, attempts - 1)
+    _ -> TryAgainLater
   }
 }
 
