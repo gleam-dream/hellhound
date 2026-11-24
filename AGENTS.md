@@ -31,6 +31,13 @@
 - Usage lives as compiled examples in `consumer/src/hellhound_reference/usage/`, run by `consumer/test/usage_test.gleam` inside `scripts/check`. README code excerpts are synchronized from tested sources with Snips.
 - After design changes, render and run the imported design check.
 
+## Releasing
+
+- `nix run github:gleam-dream/.github#release -- <version>` opens the version-bump pull request from a clean, current `main`. It never tags and never publishes. Nix supplies every tool it calls.
+- After the merge, tag the merge commit `v<version>` and push the tag. The `Release` workflow uploads the package to Hex, where it stays staged.
+- Staged publishing is on for this package on hex.pm, so a release becomes public only when a Hex maintainer approves it there with a second factor. If that setting is ever turned off, a pushed tag publishes at once; never push a release tag while it is off. An agent stops after pushing the tag and reports whether the release waits for approval or is public.
+- Push a release tag only on an explicit request that names the version. The steps and the way to undo a release are in the [shared workflow's README](https://github.com/gleam-dream/.github#publishing-a-package-to-hex).
+
 ## References
 
 - [`docs/ORACLE.md`](docs/ORACLE.md) pins the independent references Hellhound is compared with (OpenID Foundation RP suite `release-v5.3.1`, Keycloak, node-oidc-provider, Dex, Hydra, test-only oidcc and erlang-jose), what each comparison establishes and how to rerun it. Update it when a pin, fixture or result changes.

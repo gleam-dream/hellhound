@@ -1,0 +1,13 @@
+name: Release
+on:
+  push:
+    tags:
+      - "v[0-9]*"
+permissions:
+  contents: read
+jobs:
+  hex:
+    name: Hex
+    uses: gleam-dream/.github/.github/workflows/hex-publish.yml@49dca2f7871ca2da350c9869768f99d86a0c625a
+    secrets:
+      HEXPM_API_KEY: ${{ secrets.HEXPM_API_KEY }}

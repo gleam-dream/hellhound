@@ -1,5 +1,5 @@
 name = "hellhound"
-version = "0.2.2"
+version = "0.2.3"
 target = "erlang"
 gleam = ">= 1.18.0"
 licences = ["Apache-2.0"]
@@ -24,6 +24,8 @@ kryptos = ">= 1.5.0 and < 2.0.0"
 sinal = ">= 0.1.0 and < 0.2.0"
 http_gun = ">= 0.1.0 and < 0.3.0"
 gleam_http = ">= 4.4.0 and < 5.0.0"
+# File work and the exclusive lock of the test provider's kept trust anchor.
+simplifile = ">= 2.7.0 and < 3.0.0"
 
 [dev-dependencies]
 # Test-only oracles, pinned to the versions the evidence names: raw oidcc

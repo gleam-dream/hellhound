@@ -1,5 +1,6 @@
 //// Every usage example runs here against the local test provider.
 
+import hellhound/testing
 import hellhound_reference/usage/callback_addresses
 import hellhound_reference/usage/durable_store
 import hellhound_reference/usage/resource_server
@@ -29,6 +30,19 @@ pub fn callback_addresses_test() {
 
 pub fn test_provider_test() {
   test_provider.run()
+}
+
+pub fn local_run_test() {
+  let directory = "build/usage-local-run-anchor"
+  // Start from a fresh root, as a developer does after an expired one.
+  let assert Ok(Nil) = testing.replace_trust_anchor(directory)
+  let first = test_provider.local_run(directory, 0)
+  let root = testing.trust_anchor_pem(first)
+  testing.stop_provider(first)
+  // The next run presents the root the developer already trusted.
+  let second = test_provider.local_run(directory, 0)
+  assert testing.trust_anchor_pem(second) == root
+  testing.stop_provider(second)
 }
 
 pub fn responsibilities_test() {

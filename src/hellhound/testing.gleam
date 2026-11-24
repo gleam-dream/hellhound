@@ -5,7 +5,8 @@
 //// `/authorize`, token (authorization code with PKCE S256, rotating
 //// refresh tokens, client credentials), userinfo, introspection,
 //// revocation and end-session over HTTPS on loopback. Its certificate
-//// chains to a root generated at start; `config` and `trusting` trust that
+//// chains to a root generated at start (or kept by `with_trust_anchor` for
+//// a local run); `config` and `trusting` trust that
 //// root and allow loopback explicitly, so no production default changes.
 //// ID and access tokens are signed ES256 with gose.
 ////
@@ -43,6 +44,73 @@
 //// let assert Ok(session) = hellhound.complete_login(client, callback)
 //// ```
 ////
+//// ## Per-subject claims
+////
+//// For one subject, `with_granted_scopes` scripts the granted scopes,
+//// `with_email_claims` the `email` and `email_verified` assertions, and
+//// `with_extra_claims` any other claim a real provider adds to ID tokens and
+//// userinfo, such as a namespaced roles claim or `name`. `set_granted_scopes`,
+//// `set_email_claims` and `set_extra_claims` change them for later logins.
+//// `extra_claim` refuses reserved protocol claims with `ReservedClaim`.
+////
+//// ```gleam
+//// let assert Ok(roles) =
+////   testing.extra_claim(
+////     "https://example.test/roles",
+////     json.array(["operator"], json.string),
+////   )
+//// testing.provider_options() |> testing.with_extra_claims("ada", [roles])
+//// ```
+////
+//// The application reads them from the verified identity as in production
+//// (`hellhound.decode_claims`, `hellhound.name`); nothing outside this
+//// provider changes.
+////
+//// ## A local run with a real browser
+////
+//// For local development only, never a deployed environment. By default
+//// every start picks a free port and mints a fresh in-memory root, so a
+//// browser sees a new issuer and an unknown certificate authority each run.
+//// `with_port` fixes the port and `with_trust_anchor` keeps one root in a
+//// directory you choose, so the issuer and the root stay the same and you
+//// trust the root once:
+////
+//// ```gleam
+//// let assert Ok(provider) =
+////   testing.start(
+////     testing.provider_options()
+////     |> testing.with_port(8443)
+////     |> testing.with_trust_anchor(".local/hellhound"),
+////   )
+//// // issuer: https://localhost:8443
+//// // trust once: testing.trust_anchor_file(".local/hellhound")
+//// ```
+////
+//// The root may only certify `localhost`, 127.0.0.1 and ::1 (critical X.509
+//// name constraints, path length 0) and lasts 90 days; its private key is
+//// written with mode 0600 in that directory. Keep the directory out of
+//// version control. A broken or expired anchor is a `TrustAnchorFailed`
+//// error; `replace_trust_anchor` mints a new root, which you trust again.
+//// Hellhound never runs a trust-store command. To trust the root yourself:
+////
+//// - macOS, current user:
+////   `security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db .local/hellhound/hellhound-root.pem`;
+////   undo with `security remove-trusted-cert .local/hellhound/hellhound-root.pem`.
+//// - Debian or Ubuntu: copy it to
+////   `/usr/local/share/ca-certificates/hellhound-local.crt` and run
+////   `sudo update-ca-certificates`; Fedora: copy it to
+////   `/etc/pki/ca-trust/source/anchors/` and run `sudo update-ca-trust`.
+//// - Chrome or Chromium on Linux:
+////   `certutil -d sql:$HOME/.pki/nssdb -A -t "C,," -n "Hellhound local" -i .local/hellhound/hellhound-root.pem`.
+////   Firefox keeps its own store (Settings, Certificates, Import).
+////
+//// The name constraints limit only clients that enforce a trust anchor's own
+//// constraints. OpenSSL does, and the test suite checks it; Chrome documents
+//// enforcement for roots in its platform trust store (untested here); Safari
+//// and Firefox are untested. Erlang's `ssl` does not apply a trust anchor's
+//// own constraints, so an Erlang client that trusts this root is limited only
+//// by its hostname check.
+////
 //// ## Access tokens
 ////
 //// `set_access_token_audiences` changes the `aud` of issued access tokens
@@ -55,6 +123,7 @@
 //// unless a configuration names the provider's issuer and root.
 
 import gleam/bit_array
+import gleam/bool
 import gleam/crypto
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
@@ -79,6 +148,7 @@ import hellhound.{type LoginRedirect}
 import hellhound/config.{type Config}
 import hellhound/internal/memory_store
 import hellhound/internal/secure
+import hellhound/internal/test_anchor
 import hellhound/internal/test_pki
 import hellhound/internal/tls_server
 import hellhound/store.{type Store, Record}
@@ -99,6 +169,9 @@ pub opaque type ProviderOptions {
     login: LoginDecision,
     granted_scopes: Dict(String, List(String)),
     email_claims: Dict(String, EmailClaims),
+    extra_claims: Dict(String, List(ExtraClaim)),
+    port: Int,
+    trust_anchor: Option(String),
   )
 }
 
@@ -130,6 +203,9 @@ pub fn provider_options() -> ProviderOptions {
     login: SignIn("test-user"),
     granted_scopes: dict.new(),
     email_claims: dict.new(),
+    extra_claims: dict.new(),
+    port: 0,
+    trust_anchor: None,
   )
 }
 
@@ -159,6 +235,78 @@ pub fn with_email_claims(
   ProviderOptions(
     ..options,
     email_claims: dict.insert(options.email_claims, subject, claims),
+  )
+}
+
+/// One additional claim a subject's ID tokens and userinfo carry, such as a
+/// provider's namespaced roles claim or a standard profile claim like
+/// `name`. Build it with `extra_claim`, which refuses reserved names, so a
+/// value of this type never names a protocol claim.
+pub opaque type ExtraClaim {
+  ExtraClaim(name: String, value: json.Json)
+}
+
+pub type ExtraClaimError {
+  /// The name is a claim the provider computes or another testing function
+  /// owns (`email` and `email_verified` belong to `with_email_claims`).
+  ReservedClaim(name: String)
+}
+
+/// The claims an extra claim can never name: JWT registered claims, the
+/// ID-token protocol claims the provider computes or Hellhound verifies,
+/// claim-source indirection, and the email claims `EmailClaims` owns.
+const reserved_claims = [
+  "iss", "sub", "aud", "exp", "iat", "nbf", "jti", "nonce", "azp", "at_hash",
+  "c_hash", "s_hash", "auth_time", "sid", "cnf", "_claim_names",
+  "_claim_sources", "email", "email_verified",
+]
+
+/// An extra claim with any JSON value, for example a role list or a profile
+/// string:
+///
+/// ```gleam
+/// let assert Ok(roles) =
+///   testing.extra_claim(
+///     "https://example.test/roles",
+///     json.array(["operator"], json.string),
+///   )
+/// let assert Ok(name) = testing.extra_claim("name", json.string("Ada"))
+/// ```
+///
+/// Reserved protocol claims (`iss`, `sub`, `aud`, `exp`, `iat`, `nbf`,
+/// `jti`, `nonce`, `azp`, `at_hash`, `c_hash`, `s_hash`, `auth_time`, `sid`,
+/// `cnf`, `_claim_names`, `_claim_sources`) and the email claims return
+/// `ReservedClaim`. This is a provider assertion for tests, not a permission.
+pub fn extra_claim(
+  name: String,
+  value: json.Json,
+) -> Result(ExtraClaim, ExtraClaimError) {
+  case list.contains(reserved_claims, name) {
+    True -> Error(ReservedClaim(name))
+    False -> Ok(ExtraClaim(name:, value:))
+  }
+}
+
+/// Add these claims for one subject to newly issued ID tokens and userinfo,
+/// replacing any extra claims set for that subject before. A later claim of
+/// the same name replaces an earlier one in the list; an empty list removes
+/// the subject's extra claims. A subject without an entry gets none, so
+/// existing tokens and userinfo are unchanged.
+///
+/// Only this test provider's issued evidence changes: the client still
+/// verifies every token as in production, and the claims reach the
+/// application only through `hellhound.decode_claims`, the profile accessors
+/// and `hellhound.decode_userinfo`. Verification, token custody,
+/// configuration and the opaque `VerifiedIdentity` are untouched.
+/// Reserved protocol claims, identity constructors and production trust are unchanged.
+pub fn with_extra_claims(
+  options: ProviderOptions,
+  subject: String,
+  claims: List(ExtraClaim),
+) -> ProviderOptions {
+  ProviderOptions(
+    ..options,
+    extra_claims: dict.insert(options.extra_claims, subject, claims),
   )
 }
 
@@ -272,12 +420,129 @@ pub type TestError {
   AuthorizationRefused(reason: String)
 }
 
-/// Start a provider on a free loopback port. It is linked to the caller, so
-/// it ends with the test that started it; `stop_provider` ends it earlier.
-pub fn start_provider(options: ProviderOptions) -> Result(Provider, TestError) {
-  use pki <- result.try(
-    test_pki.generate() |> result.replace_error(ProviderStartFailed),
+/// Why `start` could not start a provider.
+pub type StartError {
+  /// The provider's PKI, state or listener did not start.
+  StartFailed
+  /// `with_port` named a port outside 0..65535.
+  InvalidPort(port: Int)
+  /// The fixed port of `with_port` is already in use on 127.0.0.1.
+  PortInUse(port: Int)
+  /// The root kept in `directory` (`with_trust_anchor`) cannot be used. It
+  /// is never replaced silently: fix it, or call `replace_trust_anchor` and
+  /// trust the new root.
+  TrustAnchorFailed(directory: String, error: TrustAnchorError)
+}
+
+/// Why a kept trust anchor cannot be used or written.
+pub type TrustAnchorError {
+  /// A file exists but cannot be read.
+  AnchorUnreadable(path: String)
+  /// A file is not one PEM certificate or one P-256 EC private key.
+  AnchorCorrupt(path: String)
+  /// One of the two files is missing.
+  AnchorIncomplete(missing: String)
+  /// An anchor path is a symbolic link (live or dangling) or another kind of
+  /// entry than a regular file. Links are never followed for the key.
+  AnchorNotRegularFile(path: String)
+  /// The key's private scalar does not match the root, or the root is not
+  /// exactly what Hellhound mints: version 3, ECDSA P-256 with SHA-256,
+  /// self-issued, at most 90 days, and only its basic constraints, key usage,
+  /// loopback name constraints and key identifier, each as minted.
+  AnchorMismatch
+  /// The root is outside its validity period.
+  AnchorExpired
+  /// The private key is readable by its group or by others.
+  AnchorKeyExposed(path: String)
+  /// The directory or a file could not be created or written.
+  AnchorWriteFailed(path: String)
+  /// The directory's lock (`path`, the `hellhound-root.lock` directory) was
+  /// held for the whole wait of about five seconds. Starts hold it only while
+  /// they create, load or replace the anchor, so this means either a start
+  /// killed while holding it left it behind, or a live start is still working
+  /// (retry). Remove it only after confirming no start is running against the
+  /// directory; it may hold staged anchor files, readable only by you.
+  AnchorLocked(path: String)
+}
+
+/// Listen on this port of 127.0.0.1 instead of a free one, so the issuer
+/// (`https://localhost:<port>`) is the same on every run. 0, the default,
+/// lets the OS choose. `start` answers `PortInUse` when the port is taken.
+/// Only loopback is ever served.
+pub fn with_port(options: ProviderOptions, port: Int) -> ProviderOptions {
+  ProviderOptions(..options, port:)
+}
+
+/// Keep the provider's root in `directory` and reuse it on every start, so a
+/// developer trusts it once for a local run with a real browser. The caller
+/// chooses the directory; Hellhound picks no global location and never
+/// touches a system trust store.
+///
+/// On the first start, the directory (created owner-only if missing) receives
+/// `hellhound-root.pem`, the root to trust (`trust_anchor_file`), and
+/// `hellhound-root-key.pem`, its private key, with mode 0600. Both are
+/// written in an owner-only staging directory and renamed into place, so no
+/// other user can open the key even in a directory they can traverse. Later
+/// starts load both and sign a new leaf for `localhost` and `127.0.0.1`. A
+/// corrupt, incomplete, mismatched, expired or group-readable anchor, or a
+/// symbolic link at either path (links are never followed), is a
+/// `TrustAnchorFailed` error, never a silent new root; `replace_trust_anchor`
+/// is the explicit way to mint one. Starts in several processes or worktrees
+/// may share the directory: a lock made with `mkdir`, exclusive across
+/// processes, serializes them, so exactly one creates the root and the others
+/// load it.
+///
+/// The root is a P-256 CA valid for 90 days, limited by critical X.509 name
+/// constraints to `localhost`, 127.0.0.1 and ::1 with path length 0, so a
+/// client that enforces a trust anchor's name constraints (OpenSSL, tested)
+/// refuses anything else it signs; see the module documentation.
+/// Its key still sits on disk: trust it only on a developer machine, keep
+/// the directory out of version control, and never use this in a deployed
+/// environment. Without this option the provider keeps a fresh in-memory root
+/// per start. Verification, custody and production trust are unchanged: only
+/// a configuration that names this root trusts it.
+pub fn with_trust_anchor(
+  options: ProviderOptions,
+  directory: String,
+) -> ProviderOptions {
+  ProviderOptions(..options, trust_anchor: Some(directory))
+}
+
+/// The path of the root certificate kept in `directory`, the one file a
+/// developer adds to their trust store.
+pub fn trust_anchor_file(directory: String) -> String {
+  test_anchor.certificate_file(directory)
+}
+
+/// Mint a new root in `directory` and overwrite the one kept there, for an
+/// expired or broken anchor. Every client and browser that trusted the old
+/// root must trust the new one.
+pub fn replace_trust_anchor(
+  directory: String,
+) -> Result(Nil, TrustAnchorError) {
+  test_anchor.replace(directory) |> result.map_error(anchor_error)
+}
+
+/// Start a provider, reporting why it could not start. It is linked to the
+/// caller, so it ends with the process that started it; `stop_provider` ends
+/// it earlier.
+pub fn start(options: ProviderOptions) -> Result(Provider, StartError) {
+  use <- bool.guard(
+    options.port < 0 || options.port > 65_535,
+    Error(InvalidPort(options.port)),
   )
+  use pki <- result.try(case options.trust_anchor {
+    None -> test_pki.generate() |> result.replace_error(StartFailed)
+    Some(directory) ->
+      test_pki.anchored(directory)
+      |> result.map_error(fn(error) {
+        case error {
+          test_pki.AnchorFailed(error) ->
+            TrustAnchorFailed(directory, anchor_error(error))
+          test_pki.LeafFailed -> StartFailed
+        }
+      })
+  })
   use started <- result.try(
     actor.new(initial_state(options))
     |> actor.on_message(fn(state, message) {
@@ -285,12 +550,21 @@ pub fn start_provider(options: ProviderOptions) -> Result(Provider, TestError) {
       actor.continue(change(state))
     })
     |> actor.start
-    |> result.replace_error(ProviderStartFailed),
+    |> result.replace_error(StartFailed),
   )
   let state = started.data
   use server <- result.try(
-    tls_server.start(pki, fn(request) { handle(state, request) })
-    |> result.replace_error(ProviderStartFailed),
+    tls_server.start_on(pki, options.port, fn(request) {
+      handle(state, request)
+    })
+    |> result.map_error(fn(error) {
+      process.unlink(started.pid)
+      process.kill(started.pid)
+      case error {
+        tls_server.AddressInUse -> PortInUse(options.port)
+        tls_server.ListenFailed -> StartFailed
+      }
+    }),
   )
   let issuer = "https://localhost:" <> int.to_string(server.port)
   transact(state, fn(s) { #(State(..s, issuer:), Nil) })
@@ -302,6 +576,29 @@ pub fn start_provider(options: ProviderOptions) -> Result(Provider, TestError) {
     state:,
     options:,
   ))
+}
+
+fn anchor_error(error: test_anchor.AnchorError) -> TrustAnchorError {
+  case error {
+    test_anchor.AnchorUnreadable(path) -> AnchorUnreadable(path)
+    test_anchor.AnchorCorrupt(path) -> AnchorCorrupt(path)
+    test_anchor.AnchorIncomplete(missing) -> AnchorIncomplete(missing)
+    test_anchor.AnchorNotRegularFile(path) -> AnchorNotRegularFile(path)
+    test_anchor.AnchorMismatch -> AnchorMismatch
+    test_anchor.AnchorExpired -> AnchorExpired
+    test_anchor.AnchorKeyExposed(path) -> AnchorKeyExposed(path)
+    test_anchor.AnchorWriteFailed(path) -> AnchorWriteFailed(path)
+    test_anchor.AnchorLocked(path) -> AnchorLocked(path)
+  }
+}
+
+/// Start a provider. It is linked to the caller, so it ends with the test
+/// that started it; `stop_provider` ends it earlier. Any failure is
+/// `ProviderStartFailed`; `start` reports the cause (`PortInUse`,
+/// `TrustAnchorFailed`, ...) for the `with_port` and `with_trust_anchor`
+/// options.
+pub fn start_provider(options: ProviderOptions) -> Result(Provider, TestError) {
+  start(options) |> result.replace_error(ProviderStartFailed)
 }
 
 pub fn stop_provider(provider: Provider) -> Nil {
@@ -444,6 +741,19 @@ pub fn set_email_claims(
 ) -> Nil {
   transact(provider.state, fn(s) {
     #(State(..s, options: with_email_claims(s.options, subject, claims)), Nil)
+  })
+}
+
+/// What `with_extra_claims` does, for ID tokens and userinfo reads from now
+/// on. Previously issued tokens and verified identities remain unchanged, and
+/// nothing outside this test provider changes behaviour.
+pub fn set_extra_claims(
+  provider: Provider,
+  subject: String,
+  claims: List(ExtraClaim),
+) -> Nil {
+  transact(provider.state, fn(s) {
+    #(State(..s, options: with_extra_claims(s.options, subject, claims)), Nil)
   })
 }
 
@@ -1531,6 +1841,7 @@ fn id_token(state: State, grant: CodeGrant) -> String {
       #("auth_time", json.int(grant.auth_time)),
     ]
     |> list.append(email_fields(state.options, grant.subject, Some(True)))
+    |> list.append(extra_fields(state.options, grant.subject))
     |> list.fold(claims, fn(claims, pair) {
       let assert Ok(claims) = jwt.with_claim(claims, key: pair.0, value: pair.1)
       claims
@@ -1559,6 +1870,21 @@ fn email_fields(
       list.append(fields, [#("email_verified", json.bool(verified))])
     None -> fields
   }
+}
+
+/// The subject's extra claims, one per name, the last of a repeated name
+/// winning. Reserved names cannot occur: `extra_claim` refuses them.
+fn extra_fields(
+  options: ProviderOptions,
+  subject: String,
+) -> List(#(String, json.Json)) {
+  dict.get(options.extra_claims, subject)
+  |> result.unwrap([])
+  |> list.fold(dict.new(), fn(fields, claim) {
+    let ExtraClaim(name:, value:) = claim
+    dict.insert(fields, name, value)
+  })
+  |> dict.to_list
 }
 
 fn access_claims_json(claims: AccessClaims) -> List(#(String, json.Json)) {
@@ -1652,6 +1978,7 @@ fn userinfo_endpoint(
             #("sub", json.string(claims.subject)),
             ..email_fields(s.options, claims.subject, None)
           ]
+          |> list.append(extra_fields(s.options, claims.subject))
         })
       #(s, fields)
     })
