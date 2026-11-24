@@ -3,6 +3,7 @@
 //// retention, continuity, quarantine and publication recovery; userinfo,
 //// client credentials, introspection and logout.
 
+import gleam/dict
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/list
@@ -162,6 +163,90 @@ pub fn omitted_refresh_token_is_retained_test() {
   // Custody retained the original token, which the provider still accepts.
   let assert Ok(_) = hellhound.refresh(client, refreshed.session)
   assert support.token_requests(provider) == 3
+  hellhound.stop(client)
+  support.provider_stop(provider)
+}
+
+fn department(identity: hellhound.VerifiedIdentity) -> String {
+  let assert Ok(name) =
+    hellhound.decode_claims(identity, decode.at(["department"], decode.string))
+  name
+}
+
+/// A consumer that re-checks authorization claims on refresh sees the claims
+/// of the refreshed ID token, and every later read of the session agrees.
+pub fn refreshed_id_token_replaces_the_session_identity_test() {
+  let provider = support.provider_start(support.Standard)
+  let client = start(settings(provider))
+  let session = logged_in(provider, client)
+  assert department(hellhound.session_identity(session)) == "platform"
+  assert hellhound.session_identity_origin(session) == hellhound.LoginIdentity
+  support.set_claims(provider, dict.from_list([#("department", "finance")]))
+  let assert Ok(refreshed) = hellhound.refresh(client, session)
+  assert department(hellhound.session_identity(refreshed.session)) == "finance"
+  assert hellhound.session_identity_origin(refreshed.session)
+    == hellhound.RefreshedIdentity
+  assert hellhound.identity_key(hellhound.session_identity(refreshed.session))
+    == hellhound.identity_key(hellhound.session_identity(session))
+  // The stored identity changed too: a restored session and the superseded
+  // session value both read the refreshed claims.
+  let assert Ok(restored) =
+    hellhound.restore_session(client, hellhound.session_reference(session))
+  assert department(hellhound.session_identity(restored)) == "finance"
+  assert hellhound.session_identity_origin(restored)
+    == hellhound.RefreshedIdentity
+  let assert Ok(current) = hellhound.access_token(client, session)
+  assert department(hellhound.session_identity(current.session)) == "finance"
+  hellhound.stop(client)
+  support.provider_stop(provider)
+}
+
+/// A refresh without an ID token keeps the identity the previous refresh
+/// verified, and says so; a durable store keeps both across a restore.
+pub fn refresh_without_id_token_retains_the_refreshed_identity_test() {
+  let provider = support.provider_start(support.Standard)
+  let #(client, _) = durable_client(provider)
+  let session = logged_in(provider, client)
+  support.set_claims(provider, dict.from_list([#("department", "finance")]))
+  let assert Ok(first) = hellhound.refresh(client, session)
+  support.set_claims(provider, dict.from_list([#("department", "sales")]))
+  support.script(
+    provider,
+    support.Refresh(refresh_token_of_latest(provider)),
+    support.OmitIdToken,
+  )
+  let assert Ok(second) = hellhound.refresh(client, first.session)
+  assert department(hellhound.session_identity(second.session)) == "finance"
+  assert hellhound.session_identity_origin(second.session)
+    == hellhound.RetainedIdentity
+  let assert Ok(restored) =
+    hellhound.restore_session(client, hellhound.session_reference(session))
+  assert department(hellhound.session_identity(restored)) == "finance"
+  assert hellhound.session_identity_origin(restored)
+    == hellhound.RetainedIdentity
+  // The next refresh that carries an ID token replaces it again.
+  let assert Ok(third) = hellhound.refresh(client, second.session)
+  assert department(hellhound.session_identity(third.session)) == "sales"
+  assert hellhound.session_identity_origin(third.session)
+    == hellhound.RefreshedIdentity
+  hellhound.stop(client)
+  support.provider_stop(provider)
+}
+
+/// Recovering an unconfirmed publication publishes the refreshed identity
+/// without calling the provider again.
+pub fn recovered_publication_carries_the_refreshed_identity_test() {
+  let provider = support.provider_start(support.Standard)
+  let #(client, control) = durable_client(provider)
+  let session = logged_in(provider, client)
+  support.set_claims(provider, dict.from_list([#("department", "finance")]))
+  faults.lose_ack_of(control, 2)
+  let assert Error(hellhound.RefreshUnconfirmed(recovery)) =
+    hellhound.refresh(client, session)
+  let assert Ok(recovered) = hellhound.recover_refresh(client, recovery)
+  assert department(hellhound.session_identity(recovered.session)) == "finance"
+  assert hellhound.session_identity_origin(recovered.session)
+    == hellhound.RefreshedIdentity
   hellhound.stop(client)
   support.provider_stop(provider)
 }

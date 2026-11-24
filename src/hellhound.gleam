@@ -1643,14 +1643,42 @@ fn identity_from(
 pub opaque type Session {
   Session(
     identity: VerifiedIdentity,
+    identity_origin: IdentityOrigin,
     reference: Redacted(String),
     revision: Int,
     provider: String,
   )
 }
 
+/// The session's verified identity at its current revision: the login ID
+/// token's, or that of the latest refreshed ID token, which a refresh accepts
+/// only when it keeps the login's issuer, subject, audience, authorized
+/// party, nonce and authentication time. `session_identity_origin` says which.
 pub fn session_identity(session: Session) -> VerifiedIdentity {
   session.identity
+}
+
+/// Where a session's identity at its current revision came from. May gain
+/// variants.
+pub type IdentityOrigin {
+  /// Verified at login; no refresh has replaced it.
+  LoginIdentity
+  /// The refresh that published the current revision returned an ID token;
+  /// the identity holds that token's verified claims.
+  RefreshedIdentity
+  /// The refresh that published the current revision returned no ID token
+  /// (OIDC Core §12.2); the identity of the previous revision is retained.
+  RetainedIdentity
+}
+
+/// Where `session_identity` comes from. After `refresh` or `access_token`,
+/// `RefreshedIdentity` says the claims are those of the refreshed ID token,
+/// so a caller that re-checks authorization claims on refresh can read them
+/// from `session_identity`; `RetainedIdentity` says the provider sent no new
+/// claims. Sessions stored by earlier versions report `LoginIdentity`, which
+/// is accurate: those versions never replaced the login identity.
+pub fn session_identity_origin(session: Session) -> IdentityOrigin {
+  session.identity_origin
 }
 
 /// The custody reference, for the application's own session cookie or
@@ -1729,6 +1757,7 @@ fn submit_install(
     custody.Installed(revision:) ->
       Ok(Session(
         identity:,
+        identity_origin: LoginIdentity,
         reference: redacted.new(command.reference),
         revision:,
         provider: client.provider,
@@ -2012,11 +2041,7 @@ pub type RefreshValidationError {
 /// Publication-phase recovery: the exact publication command, with the new
 /// tokens. It cannot authorise another provider call.
 pub opaque type RefreshRecovery {
-  RefreshRecovery(
-    provider: String,
-    command: Redacted(custody.Publish),
-    identity: VerifiedIdentity,
-  )
+  RefreshRecovery(provider: String, command: Redacted(custody.Publish))
 }
 
 /// An access token. `string.inspect` shows no token value.
@@ -2093,6 +2118,11 @@ fn session_of(
   use identity <- result.map(identity_from(snapshot.entry.identity))
   Session(
     identity:,
+    identity_origin: case snapshot.entry.identity_origin {
+      custody.FromLogin -> LoginIdentity
+      custody.FromRefresh -> RefreshedIdentity
+      custody.RetainedAtRefresh -> RetainedIdentity
+    },
     reference: redacted.new(snapshot.reference),
     revision: snapshot.entry.revision,
     provider: client.provider,
@@ -2379,29 +2409,23 @@ fn dispatch_refresh(
               command_id: dispatch.command_id,
               update:,
             )
-          case identity_from(dispatch.identity) {
-            Error(error) -> #(Error(error), None)
-            Ok(identity) -> {
-              let result =
-                publish(
-                  client,
-                  RefreshRecovery(
-                    provider: client.provider,
-                    command: redacted.new(command),
-                    identity:,
-                  ),
-                )
-              #(
-                result,
-                Some(case result {
-                  Ok(_) -> telemetry.Refreshed
-                  Error(RefreshUnconfirmed(_)) -> telemetry.RefreshUnconfirmed
-                  Error(RefreshQuarantined(_)) -> telemetry.RefreshQuarantined
-                  Error(_) -> telemetry.RefreshUnavailable
-                }),
-              )
-            }
-          }
+          let result =
+            publish(
+              client,
+              RefreshRecovery(
+                provider: client.provider,
+                command: redacted.new(command),
+              ),
+            )
+          #(
+            result,
+            Some(case result {
+              Ok(_) -> telemetry.Refreshed
+              Error(RefreshUnconfirmed(_)) -> telemetry.RefreshUnconfirmed
+              Error(RefreshQuarantined(_)) -> telemetry.RefreshQuarantined
+              Error(_) -> telemetry.RefreshUnavailable
+            }),
+          )
         }
       }
   }
@@ -2462,7 +2486,22 @@ fn refreshed_update(
           _, _ -> Ok(Nil)
         },
       )
-      Ok(custody.ReplaceWith(id_token.token))
+      // The verified payload, exactly as signed, replaces the sealed
+      // identity, as at login.
+      use claims_json <- result.try(
+        payload_text(id_token.token)
+        |> result.replace_error(RefreshResponseMalformed),
+      )
+      Ok(
+        custody.ReplaceWith(custody.RefreshedIdToken(
+          token: id_token.token,
+          identity: custody.Identity(
+            issuer: original.issuer,
+            subject: original.subject,
+            claims: claims_json,
+          ),
+        )),
+      )
     }
     // OIDC Core §12.2: a refresh response may omit the ID token; the
     // established identity and logout hint are retained.

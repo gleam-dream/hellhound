@@ -5,7 +5,7 @@
   (slug: "term-provider-snapshot", title: [Provider snapshot], body: [The metadata and signing-key set accepted by one cache incarnation. It is observed provider evidence, not a substitute for configured policy.]),
   (slug: "term-login-transaction", title: [Login transaction], body: [A single-use pending authorization-code login bound to one client, exact redirect, state, nonce, PKCE verifier, browser binding and expiry.]),
   (slug: "term-browser-binding", title: [Browser binding], body: [The random cookie value tying pending login transactions to one browser. It is distinct from the application's authenticated session.]),
-  (slug: "term-verified-identity", title: [Verified identity], body: [The checked identity evidence obtained from an ID token for a consumed login transaction. Its stable key is the pair of issuer and subject.]),
+  (slug: "term-verified-identity", title: [Verified identity], body: [The checked identity evidence obtained from the ID token of a consumed login transaction, or from a later refreshed ID token verified for continuity with it. Its stable key is the pair of issuer and subject.]),
   (slug: "term-session", title: [Session], body: [An opaque view of confirmed custody containing verified identity, reference and revision. It is neither a token bag nor a business permission grant.]),
   (slug: "term-session-reference", title: [Session reference], body: [A random bearer value naming custody. A reference proves neither that custody still exists nor that the caller may perform a business operation.]),
   (slug: "term-custody", title: [Custody], body: [Hellhound's authority over session identity, authentication evidence and token generations in sealed records. It owns installation, refresh transitions and termination.]),

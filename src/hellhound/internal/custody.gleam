@@ -52,10 +52,22 @@ pub type Tokens {
   )
 }
 
-/// The verified identity as sealed in custody: the login ID token's issuer,
-/// subject and claims (JSON text).
+/// The verified identity as sealed in custody: the issuer, subject and claims
+/// (JSON text) of the login ID token, or of the latest refreshed ID token
+/// verified for continuity with it.
 pub type Identity {
   Identity(issuer: String, subject: String, claims: String)
+}
+
+/// Where the entry's identity at its current revision came from.
+pub type IdentityOrigin {
+  /// Installed at login; no refresh has replaced it.
+  FromLogin
+  /// The publication of the current revision carried a refreshed ID token.
+  FromRefresh
+  /// The publication of the current revision carried no ID token; the
+  /// identity of the previous revision is retained.
+  RetainedAtRefresh
 }
 
 pub type Evidence {
@@ -77,6 +89,7 @@ pub type Entry {
     provider: String,
     install: String,
     identity: Identity,
+    identity_origin: IdentityOrigin,
     evidence: Evidence,
     tokens: Tokens,
     revision: Int,
@@ -330,6 +343,7 @@ pub fn install(custody: Custody, command: Install) -> InstallReply {
           provider: command.provider,
           install: command.command_id,
           identity: command.identity,
+          identity_origin: FromLogin,
           evidence: command.evidence,
           tokens: command.tokens,
           revision: 1,
@@ -533,13 +547,19 @@ pub type Replace(a) {
   ReplaceWith(a)
 }
 
+/// A refreshed ID token with the identity verified from it. They are
+/// replaced together, so the sealed identity always matches the sealed token.
+pub type RefreshedIdToken {
+  RefreshedIdToken(token: String, identity: Identity)
+}
+
 pub type Update {
   Update(
     access_token: String,
     token_type: String,
     expires_at: Option(Int),
     refresh_token: Replace(String),
-    id_token: Replace(String),
+    id_token: Replace(RefreshedIdToken),
     scopes: Replace(List(String)),
   )
 }
@@ -598,17 +618,23 @@ pub fn publish(custody: Custody, command: Publish) -> PublishReply {
                   },
                   id_token: case update.id_token {
                     Retain -> entry.tokens.id_token
-                    ReplaceWith(token) -> Some(token)
+                    ReplaceWith(refreshed) -> Some(refreshed.token)
                   },
                   scopes: case update.scopes {
                     Retain -> entry.tokens.scopes
                     ReplaceWith(scopes) -> scopes
                   },
                 )
+              let #(identity, identity_origin) = case update.id_token {
+                Retain -> #(entry.identity, RetainedAtRefresh)
+                ReplaceWith(refreshed) -> #(refreshed.identity, FromRefresh)
+              }
               let revision = entry.revision + 1
               let published =
                 Entry(
                   ..entry,
+                  identity:,
+                  identity_origin:,
                   tokens:,
                   revision:,
                   refresh: Idle,
@@ -728,6 +754,14 @@ fn encode(stored: Stored) -> json.Json {
         #("issuer", json.string(entry.identity.issuer)),
         #("subject", json.string(entry.identity.subject)),
         #("claims", json.string(entry.identity.claims)),
+        #(
+          "identity_origin",
+          json.string(case entry.identity_origin {
+            FromLogin -> "login"
+            FromRefresh -> "refresh"
+            RetainedAtRefresh -> "retained"
+          }),
+        ),
         #("nonce", json.string(entry.evidence.nonce)),
         #("auth_time", json.nullable(entry.evidence.auth_time, json.int)),
         #("access_token", json.string(entry.tokens.access_token)),
@@ -792,6 +826,13 @@ fn stored_decoder() -> decode.Decoder(Stored) {
     use issuer <- decode.field("issuer", decode.string)
     use subject <- decode.field("subject", decode.string)
     use claims <- decode.field("claims", decode.string)
+    // Records sealed before the origin was kept never replaced the login
+    // identity, so their claims are the login's.
+    use identity_origin <- decode.optional_field(
+      "identity_origin",
+      FromLogin,
+      identity_origin_decoder(),
+    )
     use nonce <- decode.field("nonce", decode.string)
     use auth_time <- decode.field("auth_time", decode.optional(decode.int))
     use access_token <- decode.field("access_token", decode.string)
@@ -820,6 +861,7 @@ fn stored_decoder() -> decode.Decoder(Stored) {
         provider:,
         install:,
         identity: Identity(issuer:, subject:, claims:),
+        identity_origin:,
         evidence: Evidence(nonce:, auth_time:),
         tokens: Tokens(
           access_token:,
@@ -838,6 +880,16 @@ fn stored_decoder() -> decode.Decoder(Stored) {
     )
   }
   decode.one_of(ended, [live])
+}
+
+fn identity_origin_decoder() -> decode.Decoder(IdentityOrigin) {
+  use origin <- decode.then(decode.string)
+  case origin {
+    "login" -> decode.success(FromLogin)
+    "refresh" -> decode.success(FromRefresh)
+    "retained" -> decode.success(RetainedAtRefresh)
+    _ -> decode.failure(FromLogin, "identity origin")
+  }
 }
 
 fn refresh_decoder() -> decode.Decoder(RefreshState) {

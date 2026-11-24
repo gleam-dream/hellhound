@@ -235,6 +235,11 @@ configuration alone supplies no introspection credentials.
 
 - Use `(issuer, subject)` as identity, not email. Protect application session
   cookies and apply CSRF/origin and permission checks at your routes.
+- A refreshed ID token that keeps the login's issuer, subject, audience, nonce
+  and `auth_time` replaces the session's claims. To re-check authorization
+  claims on refresh, read `session_identity(access.session)`;
+  `session_identity_origin` says whether they came from login, the refreshed ID
+  token, or were retained because the provider sent none.
 - Memory storage loses sessions on restart. Durable custody needs a protected
   32-byte sealing key, conditional writes and rollback protection; the application
   owns migrations, pool lifetime, capacity and backup policy.
