@@ -310,6 +310,11 @@ pub fn foreign_sessions_are_rejected_before_any_call_test() {
   assert hellhound.access_token(b, session) == Error(hellhound.SessionForeign)
   let assert Error(hellhound.UserinfoSession(hellhound.SessionForeign)) =
     hellhound.userinfo(b, session)
+  let assert Ok(age) = hellhound.claims_age(duration.minutes(15))
+  let foreign = hellhound.current_identity(b, session, age)
+  assert foreign == Error(hellhound.SessionForeign)
+  assert hellhound.session_error_action(hellhound.SessionForeign)
+    == hellhound.FixConfiguration
   assert support.token_requests(provider_b) == requests
   hellhound.stop(a)
   hellhound.stop(b)

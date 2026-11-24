@@ -2,8 +2,10 @@
 //// with revocation, introspection and client credentials.
 
 import gleam/bit_array
+import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http/request
+import gleam/json
 import gleam/list
 import gleam/option
 import gleam/string
@@ -142,5 +144,65 @@ pub fn trust_anchor_der_matches_the_pem_test() {
     |> string.concat
   assert bit_array.base64_encode(testing.trust_anchor_der(provider), True)
     == body
+  testing.stop_provider(provider)
+}
+
+fn role_names(identity: hellhound.VerifiedIdentity) -> List(String) {
+  hellhound.decode_claims(
+    identity,
+    decode.at(["roles"], decode.list(decode.string)),
+  )
+  |> option.from_result
+  |> option.unwrap([])
+}
+
+fn roles_claim(names: List(String)) -> List(testing.ExtraClaim) {
+  let assert Ok(claim) =
+    testing.extra_claim("roles", json.array(names, json.string))
+  [claim]
+}
+
+/// The scripted refresh answers: no ID token by default; an ID token with
+/// the subject's claims as scripted at that moment; and 503 or 429 answers
+/// that leave the grant untouched.
+pub fn refresh_answers_are_scripted_test() {
+  let #(provider, client) =
+    started(
+      testing.provider_options()
+      |> testing.with_extra_claims("ada", roles_claim(["admin", "operator"]))
+      |> testing.with_refresh_answer(testing.RefreshWithIdToken),
+    )
+  let assert Ok(bound) = hellhound.claims_age(duration.minutes(1))
+  // The provider's clock is two minutes behind at login.
+  testing.set_clock_skew(provider, duration.minutes(-2))
+  let session = login(provider, client)
+  testing.set_clock_skew(provider, duration.seconds(0))
+  testing.set_extra_claims(provider, "ada", roles_claim(["operator"]))
+  // Past the bound: one refresh returns an ID token without the removed role.
+  let assert Ok(current) = hellhound.current_identity(client, session, bound)
+  assert role_names(hellhound.current_claims(current)) == ["operator"]
+  assert testing.requests(provider).refresh_grants == 1
+  let session = hellhound.current_session(current)
+  assert role_names(hellhound.session_identity(session)) == ["operator"]
+
+  // Without an ID token the claims stay as they were.
+  testing.set_refresh_answer(provider, testing.RefreshWithoutIdToken)
+  testing.set_extra_claims(provider, "ada", [])
+  let assert Ok(access) = hellhound.refresh(client, session)
+  assert role_names(hellhound.session_identity(access.session)) == ["operator"]
+
+  // 503 and 429 are counted as rejected and leave the grant active.
+  testing.set_refresh_answer(provider, testing.RefreshUnavailable)
+  let quarantined =
+    Error(hellhound.RefreshQuarantined(hellhound.ProviderOutcomeUnknown))
+  assert hellhound.refresh(client, access.session) == quarantined
+  let other = login(provider, client)
+  testing.set_refresh_answer(provider, testing.RefreshRateLimited)
+  assert hellhound.refresh(client, other) == quarantined
+  let counts = testing.requests(provider)
+  assert counts.rejected_refresh_grants == 2
+  assert counts.refresh_grants == 2
+  assert counts.active_refresh_tokens == 2
+  hellhound.stop(client)
   testing.stop_provider(provider)
 }

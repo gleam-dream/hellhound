@@ -25,7 +25,16 @@
 //// use session <- result.try(hellhound.restore_session(client, reference))
 //// use access <- result.map(hellhound.access_token(client, session))
 //// hellhound.authorize(api_request, access.token)
+////
+//// // A permission check: claims no older than the application's bound
+//// let assert Ok(age) = hellhound.claims_age(duration.minutes(15))   // once, at startup
+//// use current <- result.try(hellhound.current_identity(client, session, age))
+//// hellhound.decode_claims(hellhound.current_claims(current), roles_decoder)
 //// ```
+////
+//// A session read returns the claims of the latest verified ID token.
+//// `session_identity` is that read without any check and is not for
+//// authorization; `current_identity` bounds the age of the claims.
 ////
 //// Error unions may gain variants. Branch on the `Action` that
 //// `login_error_action` and `session_error_action` return, and log with the
@@ -574,6 +583,9 @@ pub type ProviderFailure {
   IssuerMismatch
   /// A backend failure Hellhound does not classify further.
   UnclassifiedBackendFailure
+  /// `current_identity` did not start a claims renewal: an earlier renewal on
+  /// this node ended in quarantine less than 60 s ago. Nothing was sent.
+  RenewalPaused
 }
 
 /// Whether a failed request may have reached the provider.
@@ -651,6 +663,8 @@ pub fn describe_provider_failure(failure: ProviderFailure) -> String {
     MalformedProviderResponse -> "the provider's response could not be used"
     IssuerMismatch -> "the provider's metadata names another issuer"
     UnclassifiedBackendFailure -> "an unclassified provider failure"
+    RenewalPaused ->
+      "claims renewal is paused after a renewal on this node was quarantined"
   }
 }
 
@@ -660,7 +674,7 @@ fn failure_action(failure: ProviderFailure) -> Action {
       RetryLater
     ProviderStatus(status:, ..) if status >= 500 -> RetryLater
     ProviderStatus(..) | IssuerMismatch -> FixConfiguration
-    UnclassifiedBackendFailure -> RetryLater
+    UnclassifiedBackendFailure | RenewalPaused -> RetryLater
   }
 }
 
@@ -1536,7 +1550,12 @@ fn accept_identity(
     payload_text(id_token.token) |> result.replace_error(MalformedIdToken),
   )
   Ok(#(
-    VerifiedIdentity(issuer:, subject:, claims: redacted.new(claims)),
+    VerifiedIdentity(
+      issuer:,
+      subject:,
+      claims: redacted.new(claims),
+      login: redacted.new(claims),
+    ),
     custody.Identity(issuer:, subject:, claims: claims_json),
   ))
 }
@@ -1555,8 +1574,25 @@ fn payload_text(token: String) -> Result(String, Nil) {
 /// A verified identity. Constructed only by this module after verification
 /// and Hellhound's binding checks. The stable key is `(issuer, subject)`;
 /// email is an optional claim, never a key.
+///
+/// It holds two sets of verified claims:
+///
+/// - the **login claims**, from the ID token of the login. They never
+///   change. Exactly three accessors read them: `authentication_time`, `acr`
+///   and `amr`.
+/// - the **current claims**, from the latest verified ID token: the login's,
+///   until a refresh returns an ID token, which replaces them whole. Every
+///   other accessor and `decode_claims` read them. A claim missing from the
+///   latest token is gone, so a missing roles claim means no roles.
 pub opaque type VerifiedIdentity {
-  VerifiedIdentity(issuer: String, subject: String, claims: Redacted(Dynamic))
+  VerifiedIdentity(
+    issuer: String,
+    subject: String,
+    /// The current claims.
+    claims: Redacted(Dynamic),
+    /// The login claims.
+    login: Redacted(Dynamic),
+  )
 }
 
 pub type IdentityKey {
@@ -1595,25 +1631,31 @@ pub fn preferred_username(identity: VerifiedIdentity) -> Option(String) {
   protocol.string_claim(redacted.reveal(identity.claims), "preferred_username")
 }
 
-/// `auth_time`, when the provider included it.
+/// `auth_time` of the login, when the provider included it. Read from the
+/// login claims: a refresh never changes it.
 pub fn authentication_time(identity: VerifiedIdentity) -> Option(Timestamp) {
-  protocol.int_claim(redacted.reveal(identity.claims), "auth_time")
+  protocol.int_claim(redacted.reveal(identity.login), "auth_time")
   |> option.map(timestamp.from_unix_seconds)
 }
 
+/// `acr` of the login. Read from the login claims: a refreshed ID token
+/// with another `acr` does not change it. Use this for step-up checks.
 pub fn acr(identity: VerifiedIdentity) -> Option(String) {
-  protocol.string_claim(redacted.reveal(identity.claims), "acr")
+  protocol.string_claim(redacted.reveal(identity.login), "acr")
 }
 
+/// `amr` of the login. Read from the login claims, as `acr` is.
 pub fn amr(identity: VerifiedIdentity) -> List(String) {
   decode.run(
-    redacted.reveal(identity.claims),
+    redacted.reveal(identity.login),
     decode.at(["amr"], decode.list(decode.string)),
   )
   |> result.unwrap([])
 }
 
-/// Decode verified ID-token claims into a caller-owned type.
+/// Decode the current claims into a caller-owned type. This reads the latest
+/// verified ID token, including its `acr`, `amr` and `auth_time` members; the
+/// accessors of those names read the login claims instead.
 pub fn decode_claims(
   identity: VerifiedIdentity,
   decoder: decode.Decoder(a),
@@ -1621,6 +1663,8 @@ pub fn decode_claims(
   decode.run(redacted.reveal(identity.claims), decoder)
 }
 
+/// The identity of a stored login, before any refresh: both claim sets are
+/// the login claims.
 fn identity_from(
   sealed: custody.Identity,
 ) -> Result(VerifiedIdentity, SessionError) {
@@ -1630,9 +1674,36 @@ fn identity_from(
       issuer: sealed.issuer,
       subject: sealed.subject,
       claims: redacted.new(claims),
+      login: redacted.new(claims),
     )
   })
   |> result.replace_error(SessionRecordUnreadable)
+}
+
+/// The identity of a custody record. The current claims are the payload of
+/// the stored ID token, which publication replaces only with a verified
+/// token of the same issuer and subject. A record without a readable stored
+/// ID token reads the login claims.
+fn identity_of(entry: custody.Entry) -> Result(VerifiedIdentity, SessionError) {
+  use login <- result.map(identity_from(entry.identity))
+  let current =
+    option.to_result(entry.tokens.id_token, Nil)
+    |> result.try(payload_text)
+    |> result.try(fn(text) {
+      json.parse(text, decode.dynamic) |> result.replace_error(Nil)
+    })
+  case current {
+    Ok(claims) -> VerifiedIdentity(..login, claims: redacted.new(claims))
+    Error(Nil) -> login
+  }
+}
+
+/// `iat` of the current claims, in Unix seconds. Verification requires the
+/// claim; a record without it reads as issued at the epoch, which is past
+/// every bound.
+fn claims_issued_at(identity: VerifiedIdentity) -> Int {
+  protocol.int_claim(redacted.reveal(identity.claims), "iat")
+  |> option.unwrap(0)
 }
 
 // ===========================================================================
@@ -1640,6 +1711,9 @@ fn identity_from(
 
 /// A session whose installation custody confirmed. It carries the verified
 /// identity and a custody reference and revision; tokens stay in custody.
+/// The value is a view of custody at the moment it was read: read the
+/// session again (`restore_session`, or the session an operation returns) to
+/// see claims a later refresh replaced.
 pub opaque type Session {
   Session(
     identity: VerifiedIdentity,
@@ -1649,6 +1723,13 @@ pub opaque type Session {
   )
 }
 
+/// The session's identity as custody held it when this session value was
+/// read: the current claims, with the login's `authentication_time`, `acr`
+/// and `amr`.
+///
+/// This read is unchecked: the claims may be as old as the session. Do not
+/// decide permissions from it. For authorization use `current_identity`,
+/// which bounds the age of the claims.
 pub fn session_identity(session: Session) -> VerifiedIdentity {
   session.identity
 }
@@ -1963,7 +2044,8 @@ pub type SessionError {
   SessionRecordUnreadable
   /// The session has no access token.
   SessionHasNoAccessToken
-  /// The access token expired and the session has no refresh token.
+  /// A refresh was needed (the access token expired, or the claims were past
+  /// the `current_identity` bound) and the session has no refresh token.
   RefreshTokenUnavailable
   /// The refresh token was rejected (`invalid_grant`): revoked or expired.
   RefreshRevoked
@@ -1983,6 +2065,21 @@ pub type SessionError {
   RefreshUnconfirmed(RefreshRecovery)
   /// The refresh recovery belongs to another client configuration.
   RefreshRecoveryForeign
+  /// `current_identity` refreshed the session, and the claims are still not
+  /// within the bound. No claims are returned.
+  ClaimsNotRenewed(NotRenewedReason)
+}
+
+/// Why a refresh left the claims past the `current_identity` bound.
+pub type NotRenewedReason {
+  /// The refresh response carried no ID token, so the claims are the ones
+  /// held before. Reauthenticate: call `logout`, then send the user to
+  /// sign in.
+  NotReturned
+  /// An ID token was just issued, and its `iat` is already past the bound:
+  /// the provider's clock is behind by more than the bound, or the provider
+  /// reissues old claims. An operator must act.
+  IssuedTooLongAgo
 }
 
 pub type QuarantineReason {
@@ -2090,7 +2187,7 @@ fn session_of(
   client: Client,
   snapshot: custody.Snapshot,
 ) -> Result(Session, SessionError) {
-  use identity <- result.map(identity_from(snapshot.entry.identity))
+  use identity <- result.map(identity_of(snapshot.entry))
   Session(
     identity:,
     reference: redacted.new(snapshot.reference),
@@ -2136,7 +2233,7 @@ pub fn access_token(
       if expires_at - now <= client.settings.refresh_margin_seconds
     -> {
       let usable = expires_at > now
-      case refresh_from(client, snapshot, usable) {
+      case renew(client, snapshot, usable).result {
         // A refresh that decided nothing (not sent, store or wait timeout)
         // leaves the current token in use while it has not expired.
         Error(error) ->
@@ -2163,7 +2260,165 @@ pub fn refresh(
   use snapshot <- result.try(load(client, redacted.reveal(session.reference)))
   case snapshot.entry.revision > session.revision {
     True -> access_of(client, snapshot)
-    False -> refresh_from(client, snapshot, False)
+    False -> renew(client, snapshot, False).result
+  }
+}
+
+/// How old the claims of an authorization read may be: the longest time
+/// since the `iat` of the session's current ID token. Build it once at
+/// startup with `claims_age`.
+///
+/// This is unrelated to the OIDC `max_age` request parameter
+/// (`LoginOptions.max_age`), which bounds the age of the authentication.
+pub opaque type ClaimsAge {
+  ClaimsAge(seconds: Int)
+}
+
+/// The shortest claims age `claims_age` accepts. The design's defaults
+/// table owns this value.
+const min_claims_age_seconds = 60
+
+/// A claims age bound for `current_identity`. Refuses less than 60 s: a
+/// shorter bound would renew on almost every request, and 60 s is above the
+/// default clock tolerance (5 s). Whole seconds; a fraction is dropped.
+///
+/// The bound is application policy, so it has no default and no
+/// configuration key: the application states it on every authorization
+/// read, and may use different bounds for different routes.
+pub fn claims_age(bound: Duration) -> Result(ClaimsAge, Nil) {
+  case whole_seconds(bound) {
+    seconds if seconds >= min_claims_age_seconds -> Ok(ClaimsAge(seconds:))
+    _ -> Error(Nil)
+  }
+}
+
+/// A session whose current claims were issued within the bound given to
+/// `current_identity`. Constructed only by that function.
+///
+/// It is valid for the request that obtained it: do not store it or pass it
+/// to a later request. Authorization helpers should take a `Current`, never
+/// a `VerifiedIdentity`, so the type shows that the age was checked.
+pub opaque type Current {
+  Current(session: Session, issued_at: Int)
+}
+
+/// The claims that were checked: the current claims, with the login's
+/// `authentication_time`, `acr` and `amr`.
+pub fn current_claims(current: Current) -> VerifiedIdentity {
+  current.session.identity
+}
+
+/// The session at the revision whose claims were checked.
+pub fn current_session(current: Current) -> Session {
+  current.session
+}
+
+/// `iat` of the ID token the claims come from.
+pub fn current_issued_at(current: Current) -> Timestamp {
+  timestamp.from_unix_seconds(current.issued_at)
+}
+
+/// The authorization read: the session's current claims, only when they were
+/// issued at most `claims_age` ago.
+///
+/// 1. It reads custody, so a logged-out, expired or foreign session fails as
+///    in `access_token`.
+/// 2. When the `iat` of the stored ID token is within `claims_age` of now,
+///    and not later than now plus the clock tolerance, it returns without
+///    calling the provider.
+/// 3. Otherwise it refreshes from custody's current revision, whatever
+///    revision `session` holds. Concurrent callers share one provider call,
+///    as in `access_token`.
+/// 4. It checks the result again and returns it, or `ClaimsNotRenewed`.
+///
+/// Act on `session_error_action`:
+///
+/// | Action | Meaning | Errors |
+/// | --- | --- | --- |
+/// | `RetryLater` | Deny this request; keep the session. | not-sent failures, `RefreshNotSent(RenewalPaused)`, store and wait timeouts |
+/// | `Reauthenticate` | Call `logout`, then send the user to sign in. | `ClaimsNotRenewed(NotReturned)`, a quarantined or revoked refresh token, no refresh token, no live session |
+/// | `FixConfiguration` | An operator must act. | `ClaimsNotRenewed(IssuedTooLongAgo)`, a foreign session |
+/// | `Recover` | Call `recover_refresh`, then `current_identity` again. | `RefreshUnconfirmed` |
+///
+/// Calling `logout` on `Reauthenticate` ends the session, so a renewal that
+/// cannot succeed is not sent again on every request.
+///
+/// Renewal circuit: when a renewal this function dispatched ends in
+/// quarantine (the provider answered 5xx or 429, or timed out after the
+/// request was sent), this node starts no renewal from `current_identity`
+/// for 60 s and returns `RefreshNotSent(RenewalPaused)`. `access_token` and
+/// `refresh` are not affected.
+///
+/// The bound limits the age of the last ID token the provider issued. A
+/// role removed at the provider is denied within the bound only if the
+/// provider evaluates claims again on refresh; check that for your provider.
+/// The session needs a refresh token. The call takes at most the refresh
+/// wait plus the request timeout. To renew regardless of age, call
+/// `refresh` with a session read in this request.
+pub fn current_identity(
+  client: Client,
+  session: Session,
+  claims_age: ClaimsAge,
+) -> Result(Current, SessionError) {
+  use _ <- result.try(same_provider(client, session))
+  use snapshot <- result.try(load(client, redacted.reveal(session.reference)))
+  use held <- result.try(session_of(client, snapshot))
+  case within_claims_age(client, held, claims_age) {
+    Ok(current) -> Ok(current)
+    Error(Nil) ->
+      case provider.renewal_admitted(client.backend.provider) {
+        False -> Error(RefreshNotSent(RenewalPaused))
+        True -> {
+          let renewal = renew(client, snapshot, False)
+          case renewal.result {
+            Error(RefreshQuarantined(_) as error) -> {
+              // Only a renewal this call dispatched opens the circuit; a
+              // session found already quarantined says nothing new about
+              // the provider.
+              case renewal.dispatched {
+                True -> provider.renewal_quarantined(client.backend.provider)
+                False -> Nil
+              }
+              Error(error)
+            }
+            Error(error) -> Error(error)
+            Ok(access) ->
+              within_claims_age(client, access.session, claims_age)
+              |> result.replace_error(
+                ClaimsNotRenewed(
+                  case
+                    redacted.reveal(access.session.identity.claims)
+                    == redacted.reveal(held.identity.claims)
+                  {
+                    // The same claims as before the refresh: no ID token
+                    // replaced them.
+                    True -> NotReturned
+                    False -> IssuedTooLongAgo
+                  },
+                ),
+              )
+          }
+        }
+      }
+  }
+}
+
+/// The session as a `Current` when its current claims were issued within
+/// the bound. An `iat` later than now plus the clock tolerance is not within
+/// any bound.
+fn within_claims_age(
+  client: Client,
+  session: Session,
+  claims_age: ClaimsAge,
+) -> Result(Current, Nil) {
+  let now = client.settings.clock()
+  let issued_at = claims_issued_at(session.identity)
+  case
+    now - issued_at <= claims_age.seconds
+    && issued_at <= now + client.settings.clock_tolerance_seconds
+  {
+    True -> Ok(Current(session:, issued_at:))
+    False -> Error(Nil)
   }
 }
 
@@ -2177,29 +2432,50 @@ fn same_provider(
   }
 }
 
+/// How one refresh attempt ended.
+type Renewal {
+  Renewal(
+    result: Result(Access, SessionError),
+    /// The telemetry outcome, when the attempt is reported.
+    outcome: Option(telemetry.RefreshOutcome),
+    /// Whether this attempt published a verified ID token.
+    claims: telemetry.RefreshClaims,
+    /// Whether this attempt held the reservation and called the provider
+    /// client, as opposed to waiting, joining or being refused a reservation.
+    dispatched: Bool,
+  )
+}
+
+/// An attempt that held no reservation.
+fn undispatched(
+  result: Result(Access, SessionError),
+  outcome: Option(telemetry.RefreshOutcome),
+) -> Renewal {
+  Renewal(result:, outcome:, claims: telemetry.NotReturned, dispatched: False)
+}
+
 /// Refresh from `snapshot`. `usable`: the current token has not expired, so
 /// it may be returned when no refresh is possible.
-fn refresh_from(
-  client: Client,
-  snapshot: custody.Snapshot,
-  usable: Bool,
-) -> Result(Access, SessionError) {
+fn renew(client: Client, snapshot: custody.Snapshot, usable: Bool) -> Renewal {
   let started = secure.monotonic_ms()
   let deadline = started + client.settings.refresh_wait_ms
-  let #(result, outcome) =
-    attempt_refresh(client, snapshot, usable, deadline, 20, False)
-  case outcome {
+  let renewal = attempt_refresh(client, snapshot, usable, deadline, 20, False)
+  case renewal.outcome {
     Some(outcome) ->
       sinal.emit(
         telemetry.refresh(),
         telemetry.SessionMeasurements(
           duration_ms: secure.monotonic_ms() - started,
         ),
-        telemetry.Refresh(outcome:, correlation: client.correlation),
+        telemetry.Refresh(
+          outcome:,
+          claims: renewal.claims,
+          correlation: client.correlation,
+        ),
       )
     None -> Nil
   }
-  result
+  renewal
 }
 
 fn lease_seconds(settings: Settings) -> Int {
@@ -2215,7 +2491,7 @@ fn attempt_refresh(
   deadline: Int,
   pause: Int,
   waited: Bool,
-) -> #(Result(Access, SessionError), Option(telemetry.RefreshOutcome)) {
+) -> Renewal {
   let reference = snapshot.reference
   let command_id = secure.random_token(24)
   case
@@ -2231,21 +2507,23 @@ fn attempt_refresh(
     custody.Reserved(dispatch) -> dispatch_refresh(client, dispatch)
     custody.Busy ->
       case secure.monotonic_ms() + pause < deadline {
-        False -> #(
-          Error(RefreshWaitTimedOut),
-          Some(telemetry.RefreshWaitTimedOut),
-        )
+        False ->
+          undispatched(
+            Error(RefreshWaitTimedOut),
+            Some(telemetry.RefreshWaitTimedOut),
+          )
         True -> {
           process.sleep(pause)
           // Re-read: the winner may have published a new revision.
           case load(client, reference) {
-            Error(error) -> #(Error(error), None)
+            Error(error) -> undispatched(Error(error), None)
             Ok(current) ->
               case current.entry.revision > snapshot.entry.revision {
-                True -> #(
-                  access_of(client, current),
-                  Some(telemetry.RefreshJoined),
-                )
+                True ->
+                  undispatched(
+                    access_of(client, current),
+                    Some(telemetry.RefreshJoined),
+                  )
                 False ->
                   attempt_refresh(
                     client,
@@ -2259,40 +2537,39 @@ fn attempt_refresh(
           }
         }
       }
-    custody.Stale(current) -> #(access_of(client, current), case waited {
-      True -> Some(telemetry.RefreshJoined)
-      False -> None
-    })
-    custody.ReservationQuarantined(reason) -> #(
-      Error(RefreshQuarantined(quarantine_from(reason))),
-      Some(telemetry.RefreshQuarantined),
-    )
-    custody.ReservationRevoked -> #(
-      Error(RefreshRevoked),
-      Some(telemetry.RefreshRevoked),
-    )
+    custody.Stale(current) ->
+      undispatched(access_of(client, current), case waited {
+        True -> Some(telemetry.RefreshJoined)
+        False -> None
+      })
+    custody.ReservationQuarantined(reason) ->
+      undispatched(
+        Error(RefreshQuarantined(quarantine_from(reason))),
+        Some(telemetry.RefreshQuarantined),
+      )
+    custody.ReservationRevoked ->
+      undispatched(Error(RefreshRevoked), Some(telemetry.RefreshRevoked))
     custody.NoRefreshToken(current) ->
       case usable {
-        True -> #(access_of(client, current), None)
-        False -> #(Error(RefreshTokenUnavailable), None)
+        True -> undispatched(access_of(client, current), None)
+        False -> undispatched(Error(RefreshTokenUnavailable), None)
       }
-    custody.ReservationFailed(error) -> #(
-      Error(read_error(error)),
-      Some(telemetry.RefreshUnavailable),
-    )
-    custody.ReservationUnknown -> #(
-      Error(SessionStoreUnavailable),
-      Some(telemetry.RefreshUnavailable),
-    )
+    custody.ReservationFailed(error) ->
+      undispatched(Error(read_error(error)), Some(telemetry.RefreshUnavailable))
+    custody.ReservationUnknown ->
+      undispatched(
+        Error(SessionStoreUnavailable),
+        Some(telemetry.RefreshUnavailable),
+      )
   }
 }
 
-fn dispatch_refresh(
-  client: Client,
-  dispatch: custody.Dispatch,
-) -> #(Result(Access, SessionError), Option(telemetry.RefreshOutcome)) {
+fn dispatch_refresh(client: Client, dispatch: custody.Dispatch) -> Renewal {
   let outcome =
     native.refresh(client.backend, refresh_token: dispatch.refresh_token)
+  let dispatched = fn(result, outcome, claims) {
+    Renewal(result:, outcome:, claims:, dispatched: True)
+  }
   let settle = fn(settlement, error, event) {
     case
       custody.settle(
@@ -2302,12 +2579,14 @@ fn dispatch_refresh(
         settlement,
       )
     {
-      True -> #(Error(error), Some(event))
+      True -> dispatched(Error(error), Some(event), telemetry.NotReturned)
       // Unsettled: the lease will run out and quarantine the generation.
-      False -> #(
-        Error(SessionStoreUnavailable),
-        Some(telemetry.RefreshUnavailable),
-      )
+      False ->
+        dispatched(
+          Error(SessionStoreUnavailable),
+          Some(telemetry.RefreshUnavailable),
+          telemetry.NotReturned,
+        )
     }
   }
   let quarantine = fn(reason) {
@@ -2380,7 +2659,8 @@ fn dispatch_refresh(
               update:,
             )
           case identity_from(dispatch.identity) {
-            Error(error) -> #(Error(error), None)
+            Error(error) ->
+              dispatched(Error(error), None, telemetry.NotReturned)
             Ok(identity) -> {
               let result =
                 publish(
@@ -2391,7 +2671,7 @@ fn dispatch_refresh(
                     identity:,
                   ),
                 )
-              #(
+              dispatched(
                 result,
                 Some(case result {
                   Ok(_) -> telemetry.Refreshed
@@ -2399,6 +2679,10 @@ fn dispatch_refresh(
                   Error(RefreshQuarantined(_)) -> telemetry.RefreshQuarantined
                   Error(_) -> telemetry.RefreshUnavailable
                 }),
+                case result, update.id_token {
+                  Ok(_), custody.ReplaceWith(_) -> telemetry.Replaced
+                  _, _ -> telemetry.NotReturned
+                },
               )
             }
           }
@@ -2465,7 +2749,8 @@ fn refreshed_update(
       Ok(custody.ReplaceWith(id_token.token))
     }
     // OIDC Core §12.2: a refresh response may omit the ID token; the
-    // established identity and logout hint are retained.
+    // stored ID token, and with it the current claims and the logout hint,
+    // is retained.
     None -> Ok(custody.Retain)
   })
   use scopes <- result.try(case response.scopes {
@@ -2573,6 +2858,8 @@ pub fn session_error_action(error: SessionError) -> Action {
     SessionStoreUnavailable | RefreshWaitTimedOut -> RetryLater
     RefreshNotSent(_) -> RetryLater
     RefreshUnconfirmed(_) -> Recover
+    ClaimsNotRenewed(NotReturned) -> Reauthenticate
+    ClaimsNotRenewed(IssuedTooLongAgo) -> FixConfiguration
   }
 }
 
@@ -2585,7 +2872,7 @@ pub fn describe_session_error(error: SessionError) -> String {
     SessionRecordUnreadable -> "the stored session did not open"
     SessionHasNoAccessToken -> "the session has no access token"
     RefreshTokenUnavailable ->
-      "the access token expired and the session has no refresh token"
+      "a refresh was needed and the session has no refresh token"
     RefreshRevoked -> "the refresh token was rejected (invalid_grant)"
     RefreshRejected(error) ->
       "the token endpoint refused the refresh: " <> oauth_error_name(error)
@@ -2598,6 +2885,10 @@ pub fn describe_session_error(error: SessionError) -> String {
     RefreshUnconfirmed(_) ->
       "refreshed tokens were not confirmed in custody; call recover_refresh"
     RefreshRecoveryForeign -> "the refresh recovery belongs to another client"
+    ClaimsNotRenewed(NotReturned) ->
+      "the refresh returned no ID token, so the claims were not renewed"
+    ClaimsNotRenewed(IssuedTooLongAgo) ->
+      "the refreshed ID token was issued longer ago than the claims age bound"
   }
 }
 

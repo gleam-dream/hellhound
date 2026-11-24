@@ -248,6 +248,9 @@ fn home(request: Request, context: Context) -> Response {
         "<p><a id=\"login\" href=\"/login\">Sign in</a></p>",
       )
     Ok(s) -> {
+      // Display only. `session_identity` is the unchecked read of the
+      // current claims; a permission decision goes through
+      // `hellhound.current_identity` (see `usage/authorization`).
       let identity = hellhound.session_identity(s)
       let profile =
         hellhound.decode_claims(identity, profile_decoder())

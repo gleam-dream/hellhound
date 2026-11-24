@@ -178,9 +178,11 @@ pub fn every_outcome_round_trips_test() {
   })
   list.each(telemetry.refresh_outcomes, fn(outcome) {
     let codec = sinal.metadata_fields(telemetry.refresh())
-    let value = telemetry.Refresh(outcome:, correlation: None)
-    let assert Ok(Nil) = fields.check(codec, value)
-    assert fields.decode(codec, fields.encode(codec, value)) == Ok(value)
+    list.each([telemetry.Replaced, telemetry.NotReturned], fn(claims) {
+      let value = telemetry.Refresh(outcome:, claims:, correlation: None)
+      let assert Ok(Nil) = fields.check(codec, value)
+      assert fields.decode(codec, fields.encode(codec, value)) == Ok(value)
+    })
   })
   list.each(telemetry.revocations, fn(revocation) {
     let codec = sinal.metadata_fields(telemetry.logout())

@@ -66,6 +66,16 @@
 //// (`hellhound.decode_claims`, `hellhound.name`); nothing outside this
 //// provider changes.
 ////
+//// ## Refresh answers
+////
+//// By default a refresh rotates the refresh token and returns no ID token.
+//// `with_refresh_answer` and `set_refresh_answer` script the other answers a
+//// real provider gives: `RefreshWithIdToken` returns a new ID token with the
+//// subject's claims as scripted at that moment (so a role removed with
+//// `set_extra_claims` is gone from it), and `RefreshUnavailable` and
+//// `RefreshRateLimited` answer 503 and 429 without touching the grant. With
+//// `set_clock_skew` they exercise `hellhound.current_identity`.
+////
 //// ## A local run with a real browser
 ////
 //// For local development only, never a deployed environment. By default
@@ -165,6 +175,7 @@ pub opaque type ProviderOptions {
     access_token_ttl: Int,
     access_token_audiences: List(String),
     refresh_delay_ms: Int,
+    refresh_answer: RefreshAnswer,
     scopes: List(String),
     login: LoginDecision,
     granted_scopes: Dict(String, List(String)),
@@ -173,6 +184,22 @@ pub opaque type ProviderOptions {
     port: Int,
     trust_anchor: Option(String),
   )
+}
+
+/// How the token endpoint answers a refresh grant.
+pub type RefreshAnswer {
+  /// Rotate the refresh token and answer new tokens without an ID token,
+  /// which OIDC Core §12.2 allows. The default.
+  RefreshWithoutIdToken
+  /// Rotate and also return a new ID token: `iat` is the provider's clock,
+  /// `auth_time` is the login's, there is no `nonce`, and the subject's
+  /// email and extra claims are the ones scripted at that moment.
+  RefreshWithIdToken
+  /// Answer `503` and leave the grant untouched, as an overloaded provider
+  /// would. Hellhound cannot tell whether the grant was processed.
+  RefreshUnavailable
+  /// Answer `429` and leave the grant untouched, as a rate limiter would.
+  RefreshRateLimited
 }
 
 /// What the provider's `/authorize` endpoint does with a browser that
@@ -190,8 +217,9 @@ pub type LoginDecision {
 }
 
 /// Defaults: client `hellhound-test` with a random secret, five-minute access
-/// tokens whose audience is the client id, no refresh delay, scopes
-/// `openid email profile`, and `/authorize` signing in `test-user`.
+/// tokens whose audience is the client id, no refresh delay, refresh
+/// answers without an ID token, scopes `openid email profile`, and
+/// `/authorize` signing in `test-user`.
 pub fn provider_options() -> ProviderOptions {
   ProviderOptions(
     client_id: "hellhound-test",
@@ -199,6 +227,7 @@ pub fn provider_options() -> ProviderOptions {
     access_token_ttl: 300,
     access_token_audiences: [],
     refresh_delay_ms: 0,
+    refresh_answer: RefreshWithoutIdToken,
     scopes: ["openid", "email", "profile"],
     login: SignIn("test-user"),
     granted_scopes: dict.new(),
@@ -370,6 +399,15 @@ pub fn with_refresh_delay(
   delay: Duration,
 ) -> ProviderOptions {
   ProviderOptions(..options, refresh_delay_ms: duration.to_milliseconds(delay))
+}
+
+/// How the token endpoint answers refresh grants; `set_refresh_answer`
+/// changes it after start.
+pub fn with_refresh_answer(
+  options: ProviderOptions,
+  answer: RefreshAnswer,
+) -> ProviderOptions {
+  ProviderOptions(..options, refresh_answer: answer)
 }
 
 fn whole_seconds(value: Duration) -> Int {
@@ -766,6 +804,16 @@ pub fn set_granted_scopes(
 ) -> Nil {
   transact(provider.state, fn(s) {
     #(State(..s, options: with_granted_scopes(s.options, subject, scopes)), Nil)
+  })
+}
+
+/// How the token endpoint answers refresh grants from now on.
+pub fn set_refresh_answer(provider: Provider, answer: RefreshAnswer) -> Nil {
+  transact(provider.state, fn(s) {
+    #(
+      State(..s, options: ProviderOptions(..s.options, refresh_answer: answer)),
+      Nil,
+    )
   })
 }
 
@@ -1636,7 +1684,13 @@ fn token_endpoint(
         Ok("authorization_code") -> code_grant(state, field)
         Ok("refresh_token") -> {
           process.sleep(options.refresh_delay_ms)
-          refresh_grant(state, field)
+          case options.refresh_answer {
+            RefreshWithoutIdToken -> refresh_grant(state, field, False)
+            RefreshWithIdToken -> refresh_grant(state, field, True)
+            RefreshUnavailable ->
+              refused_refresh(state, 503, "temporarily_unavailable")
+            RefreshRateLimited -> refused_refresh(state, 429, "slow_down")
+          }
         }
         Ok("client_credentials") -> {
           let scopes = case field("scope") {
@@ -1704,7 +1758,8 @@ fn code_grant(
                     ),
                   ),
                 )
-              let id_token = id_token(s, grant)
+              let id_token =
+                id_token(s, grant.subject, Some(grant.nonce), grant.auth_time)
               #(s, Ok(#(access, refresh, id_token, grant.scopes)))
             }
             _ -> #(State(..s, codes: dict.delete(s.codes, code)), Error(Nil))
@@ -1720,9 +1775,30 @@ fn code_grant(
   }
 }
 
+/// An error answer that leaves every refresh grant as it was.
+fn refused_refresh(
+  state: Subject(Message),
+  status: Int,
+  code: String,
+) -> Response(String) {
+  transact(state, fn(s) {
+    #(
+      count(s, fn(c) {
+        RequestCounts(
+          ..c,
+          rejected_refresh_grants: c.rejected_refresh_grants + 1,
+        )
+      }),
+      Nil,
+    )
+  })
+  oauth_error(status, code)
+}
+
 fn refresh_grant(
   state: Subject(Message),
   field: fn(String) -> Result(String, Nil),
+  with_id_token: Bool,
 ) -> Response(String) {
   case field("refresh_token") {
     Error(Nil) -> oauth_error(400, "invalid_request")
@@ -1741,10 +1817,12 @@ fn refresh_grant(
                 s.refresh_tokens
                 |> dict.insert(presented, RefreshGrant(..grant, active: False))
                 |> dict.insert(refresh, grant)
-              #(
-                State(..s, refresh_tokens: tokens),
-                Ok(#(access, refresh, grant.scopes)),
-              )
+              let s = State(..s, refresh_tokens: tokens)
+              let id_token = case with_id_token {
+                True -> Some(id_token(s, grant.subject, None, grant.auth_time))
+                False -> None
+              }
+              #(s, Ok(#(access, refresh, id_token, grant.scopes)))
             }
             _ -> #(
               count(s, fn(c) {
@@ -1759,8 +1837,8 @@ fn refresh_grant(
         })
       case issued {
         // OIDC Core §12.2: the refresh response may omit the ID token.
-        Ok(#(access, refresh, scopes)) ->
-          tokens_response(state, access, refresh, None, scopes)
+        Ok(#(access, refresh, id_token, scopes)) ->
+          tokens_response(state, access, refresh, id_token, scopes)
         Error(Nil) -> oauth_error(400, "invalid_grant")
       }
     }
@@ -1825,23 +1903,31 @@ fn issue(
   )
 }
 
-fn id_token(state: State, grant: CodeGrant) -> String {
+/// An ID token for `subject`. A refreshed ID token carries no nonce (OIDC
+/// Core §12.2) and the `auth_time` of the original authentication.
+fn id_token(
+  state: State,
+  subject: String,
+  nonce: Option(String),
+  auth_time: Int,
+) -> String {
   let iat = now(state)
   let assert [SigningKey(key:, ..), ..] = state.keys
   let claims =
     jwt.claims()
     |> jwt.with_issuer(state.issuer)
-    |> jwt.with_subject(grant.subject)
+    |> jwt.with_subject(subject)
     |> jwt.with_audience(state.options.client_id)
     |> jwt.with_issued_at(timestamp.from_unix_seconds(iat))
     |> jwt.with_expiration(timestamp.from_unix_seconds(iat + 600))
   let claims =
-    [
-      #("nonce", json.string(grant.nonce)),
-      #("auth_time", json.int(grant.auth_time)),
-    ]
-    |> list.append(email_fields(state.options, grant.subject, Some(True)))
-    |> list.append(extra_fields(state.options, grant.subject))
+    case nonce {
+      Some(nonce) -> [#("nonce", json.string(nonce))]
+      None -> []
+    }
+    |> list.append([#("auth_time", json.int(auth_time))])
+    |> list.append(email_fields(state.options, subject, Some(True)))
+    |> list.append(extra_fields(state.options, subject))
     |> list.fold(claims, fn(claims, pair) {
       let assert Ok(claims) = jwt.with_claim(claims, key: pair.0, value: pair.1)
       claims

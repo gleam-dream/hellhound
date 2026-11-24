@@ -282,7 +282,23 @@ pub fn login() -> sinal.Event(SessionMeasurements, Login) {
 
 /// `[hellhound, refresh]` metadata.
 pub type Refresh {
-  Refresh(outcome: RefreshOutcome, correlation: Option(Correlation))
+  Refresh(
+    outcome: RefreshOutcome,
+    /// What this refresh did to the session's current claims.
+    claims: RefreshClaims,
+    correlation: Option(Correlation),
+  )
+}
+
+/// What a refresh did to the session's current claims. No claim value is
+/// ever recorded.
+pub type RefreshClaims {
+  /// This refresh published a verified ID token; its claims are now the
+  /// session's current claims.
+  Replaced
+  /// Every other case: the response carried no ID token, or this refresh
+  /// published nothing (it failed, was not confirmed, or joined another).
+  NotReturned
 }
 
 pub type RefreshOutcome {
@@ -318,7 +334,8 @@ pub const refresh_outcomes = [
   RefreshUnavailable,
 ]
 
-/// The descriptor for `[hellhound, refresh]`; `outcome` is a snake_case binary.
+/// The descriptor for `[hellhound, refresh]`; `outcome` is a snake_case binary
+/// and `claims` is `<<"replaced">>` or `<<"not_returned">>`.
 pub fn refresh() -> sinal.Event(SessionMeasurements, Refresh) {
   let metadata = {
     use outcome <- fields.include(
@@ -337,10 +354,19 @@ pub fn refresh() -> sinal.Event(SessionMeasurements, Refresh) {
       }),
       get: fn(m) { m.outcome },
     )
+    use claims <- fields.include(
+      fields.enum("claims", [Replaced, NotReturned], fn(c) {
+        case c {
+          Replaced -> "replaced"
+          NotReturned -> "not_returned"
+        }
+      }),
+      get: fn(m) { m.claims },
+    )
     use correlation <- fields.include(correlation.field(), get: fn(m) {
       m.correlation
     })
-    fields.success(Refresh(outcome:, correlation:))
+    fields.success(Refresh(outcome:, claims:, correlation:))
   }
   sinal.event(["hellhound", "refresh"], session_duration(), metadata)
 }

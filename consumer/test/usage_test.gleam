@@ -1,6 +1,7 @@
 //// Every usage example runs here against the local test provider.
 
 import hellhound/testing
+import hellhound_reference/usage/authorization
 import hellhound_reference/usage/callback_addresses
 import hellhound_reference/usage/durable_store
 import hellhound_reference/usage/resource_server
@@ -47,4 +48,8 @@ pub fn local_run_test() {
 
 pub fn responsibilities_test() {
   responsibilities.run()
+}
+
+pub fn authorization_test() {
+  authorization.run()
 }

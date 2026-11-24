@@ -293,6 +293,11 @@ pub fn mint(
 @external(erlang, "hellhound_test_provider", "set_claims")
 pub fn set_int_claims(provider: Provider, claims: Dict(String, Int)) -> Nil
 
+/// Extra or replacement ID-token claims of any JSON type for every issued
+/// ID token, replacing the earlier set.
+@external(erlang, "hellhound_test_provider", "set_claims")
+pub fn set_json_claims(provider: Provider, claims: Dict(String, Dynamic)) -> Nil
+
 /// A GET callback with this raw query and the binding cookie of `redirect`.
 pub fn query_callback(
   redirect: hellhound.LoginRedirect,

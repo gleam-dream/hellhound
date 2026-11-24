@@ -341,6 +341,8 @@ pub opaque type Message {
   Reloaded(process.Pid, Result(Discovered, Failure))
   Discovery(process.Pid, Result(Discovered, Failure))
   FetchExited(process.Down)
+  RenewalAdmission(reply: Subject(Bool))
+  RenewalQuarantined
 }
 
 /// Network fetches run in a separate process, one at a time, so the actor
@@ -370,6 +372,8 @@ type State {
     backoff_ms: Int,
     /// Monotonic milliseconds when the last unknown-key refresh started.
     last_key_refresh: Option(Int),
+    /// Monotonic milliseconds until which the renewal circuit is open.
+    renewals_paused_until: Option(Int),
     /// Monotonic milliseconds; a test seam.
     now: fn() -> Int,
     fetch: Fetch,
@@ -383,6 +387,10 @@ pub type Provider {
 /// Minimum interval between unknown-key refreshes of one cache incarnation.
 /// The design's defaults table owns this value.
 const key_refresh_cooldown_ms = 30_000
+
+/// How long the renewal circuit stays open after a claims renewal ended in
+/// quarantine. The design's defaults table owns this value.
+const renewal_pause_ms = 60_000
 
 /// Delay before retrying a reload that found another fetch in flight.
 const reload_retry_ms = 1000
@@ -415,6 +423,7 @@ pub fn start(
       initial: Pending(None),
       backoff_ms: first_backoff_ms,
       last_key_refresh: None,
+      renewals_paused_until: None,
       now:,
       fetch: Idle,
     ))
@@ -497,6 +506,26 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       process.send(reply, snapshot(state))
       actor.continue(state)
     }
+    RenewalAdmission(reply) -> {
+      let now = state.now()
+      case state.renewals_paused_until {
+        Some(until) if until > now -> {
+          process.send(reply, False)
+          actor.continue(state)
+        }
+        _ -> {
+          process.send(reply, True)
+          actor.continue(State(..state, renewals_paused_until: None))
+        }
+      }
+    }
+    RenewalQuarantined ->
+      actor.continue(
+        State(
+          ..state,
+          renewals_paused_until: Some(state.now() + renewal_pause_ms),
+        ),
+      )
     Discover ->
       case state.fetch {
         Idle -> {
@@ -685,6 +714,23 @@ pub fn refresh_keys(provider: Provider) -> Result(Snapshot, Failure) {
     Ok(Some(snapshot)) -> Ok(snapshot)
     _ -> Error(protocol.NotReady)
   }
+}
+
+/// Whether a refresh made only to renew claims may start. `False` while the
+/// renewal circuit is open. A cache that does not answer admits the renewal:
+/// the refresh then fails as not ready, and nothing is sent.
+pub fn renewal_admitted(provider: Provider) -> Bool {
+  case call.call(provider.subject, provider.timeout, RenewalAdmission) {
+    Ok(admitted) -> admitted
+    Error(_) -> True
+  }
+}
+
+/// Open the renewal circuit: a claims renewal that was dispatched ended in
+/// quarantine. This incarnation admits no further claims renewal for
+/// `renewal_pause_ms`.
+pub fn renewal_quarantined(provider: Provider) -> Nil {
+  process.send(provider.subject, RenewalQuarantined)
 }
 
 /// The same provider with calls bounded by `timeout` milliseconds.
