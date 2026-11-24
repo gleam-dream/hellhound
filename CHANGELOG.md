@@ -106,7 +106,12 @@ format is unchanged: 0.2.x and 0.3.0 read the same records, in both directions.
    again on refresh and returns an ID token, so verify both. A provider that
    returns no ID token on refresh denies every permission check once the
    claims pass the bound (`ClaimsNotRenewed(NotReturned)`), until an operator
-   fixes it. Request a refresh
+   fixes it. Your application may match that one error and send the person to
+   sign in instead; the `authorization` usage example marks where. To catch it
+   before anyone is denied, alert when `[hellhound, refresh]` reports
+   `outcome` `refreshed` with `claims` `not_returned`: every refresh carries
+   it, including the ones `access_token` makes, so it fires on the first
+   refresh after a provider change. Request a refresh
    token, and keep node clocks within the clock tolerance
    (`config.with_clock_tolerance`, default 5 s). Past the bound each permission
    check costs one refresh per session, so size that load against your

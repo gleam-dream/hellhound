@@ -260,6 +260,14 @@ fn denied(
       let _ = hellhound.logout(client, session, hellhound.default_logout())
       SignInAgain
     }
+    // The provider returns no ID token on refresh, so no refresh can renew
+    // the claims. This is the application's choice. Denying keeps the
+    // session and makes the fault visible until an operator fixes the
+    // provider. To send the person to sign in once per bound instead, end
+    // the session here as the `Reauthenticate` branch does.
+    hellhound.FixConfiguration,
+      hellhound.ClaimsNotRenewed(hellhound.NotReturned)
+    -> Misconfigured
     hellhound.FixConfiguration, _ | hellhound.RejectRequest, _ -> Misconfigured
   }
 }
