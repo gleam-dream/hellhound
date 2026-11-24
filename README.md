@@ -191,10 +191,11 @@ with one shared refresh when they were not.
 
 <!-- snips: consumer/src/hellhound_reference/usage/authorization.gleam#authorization -->
 ```gleam
-/// Built once at startup. The bound is the application's policy; Hellhound
-/// has no default. `claims_age` refuses less than 60 s.
-pub fn role_claims_age() -> hellhound.ClaimsAge {
-  let assert Ok(age) = hellhound.claims_age(duration.minutes(15))
+/// Built once at startup, from the client it is used with. The bound is the
+/// application's policy; Hellhound has no default. `claims_age` refuses less
+/// than 60 s, and a bound not greater than the client's clock tolerance.
+pub fn role_claims_age(client: hellhound.Client) -> hellhound.ClaimsAge {
+  let assert Ok(age) = hellhound.claims_age(client, duration.minutes(15))
   age
 }
 

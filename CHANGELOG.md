@@ -31,8 +31,10 @@ format is unchanged: 0.2.x and 0.3.0 read the same records, in both directions.
   were issued within the bound, with no provider call when they already were,
   and renews them with one refresh shared by concurrent callers when they were
   not. Accessors: `current_claims`, `current_session`, `current_issued_at`.
-- `hellhound.claims_age(duration) -> Result(ClaimsAge, Nil)`, the checked bound.
-  It refuses less than 60 s. There is no default and no configuration key.
+- `hellhound.claims_age(client, duration) -> Result(ClaimsAge, Nil)`, the
+  checked bound, built from the client it is used with. It refuses less than
+  60 s, and a bound not greater than that client's clock tolerance. There is no
+  default and no configuration key.
 - A renewal circuit. After a renewal started by `current_identity` ends in
   quarantine, that node starts no renewal from `current_identity` for 60 s and
   returns `RefreshNotSent(RenewalPaused)`. `access_token` and `refresh` are not

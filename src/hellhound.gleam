@@ -27,7 +27,7 @@
 //// hellhound.authorize(api_request, access.token)
 ////
 //// // A permission check: claims no older than the application's bound
-//// let assert Ok(age) = hellhound.claims_age(duration.minutes(15))   // once, at startup
+//// let assert Ok(age) = hellhound.claims_age(client, duration.minutes(15))   // once, at startup
 //// use current <- result.try(hellhound.current_identity(client, session, age))
 //// hellhound.decode_claims(hellhound.current_claims(current), roles_decoder)
 //// ```
@@ -2266,7 +2266,7 @@ pub fn refresh(
 
 /// How old the claims of an authorization read may be: the longest time
 /// since the `iat` of the session's current ID token. Build it once at
-/// startup with `claims_age`.
+/// startup with `claims_age`, from the client it is used with.
 ///
 /// This is unrelated to the OIDC `max_age` request parameter
 /// (`LoginOptions.max_age`), which bounds the age of the authentication.
@@ -2278,17 +2278,23 @@ pub opaque type ClaimsAge {
 /// table owns this value.
 const min_claims_age_seconds = 60
 
-/// A claims age bound for `current_identity`. Refuses less than 60 s: a
-/// shorter bound would renew on almost every request, and 60 s is above the
-/// default clock tolerance (5 s). Whole seconds; a fraction is dropped.
+/// A claims age bound for `current_identity`, built from the client it is
+/// used with. Refuses less than 60 s, and a bound not greater than that
+/// client's clock tolerance (`config.with_clock_tolerance`, default 5 s): a
+/// shorter bound would renew on almost every request. Whole seconds; a
+/// fraction is dropped.
 ///
 /// The bound is application policy, so it has no default and no
 /// configuration key: the application states it on every authorization
 /// read, and may use different bounds for different routes.
-pub fn claims_age(bound: Duration) -> Result(ClaimsAge, Nil) {
-  case whole_seconds(bound) {
-    seconds if seconds >= min_claims_age_seconds -> Ok(ClaimsAge(seconds:))
-    _ -> Error(Nil)
+pub fn claims_age(client: Client, bound: Duration) -> Result(ClaimsAge, Nil) {
+  let seconds = whole_seconds(bound)
+  case
+    seconds >= min_claims_age_seconds
+    && seconds > client.settings.clock_tolerance_seconds
+  {
+    True -> Ok(ClaimsAge(seconds:))
+    False -> Error(Nil)
   }
 }
 

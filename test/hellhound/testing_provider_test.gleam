@@ -172,7 +172,7 @@ pub fn refresh_answers_are_scripted_test() {
       |> testing.with_extra_claims("ada", roles_claim(["admin", "operator"]))
       |> testing.with_refresh_answer(testing.RefreshWithIdToken),
     )
-  let assert Ok(bound) = hellhound.claims_age(duration.minutes(1))
+  let assert Ok(bound) = hellhound.claims_age(client, duration.minutes(1))
   // The provider's clock is two minutes behind at login.
   testing.set_clock_skew(provider, duration.minutes(-2))
   let session = login(provider, client)

@@ -23,8 +23,9 @@ import sinal
 
 const quarter_hour = 900
 
-fn bound() -> hellhound.ClaimsAge {
-  let assert Ok(age) = hellhound.claims_age(duration.seconds(quarter_hour))
+fn bound(client: hellhound.Client) -> hellhound.ClaimsAge {
+  let assert Ok(age) =
+    hellhound.claims_age(client, duration.seconds(quarter_hour))
   age
 }
 
@@ -69,20 +70,47 @@ fn current_roles(
   client: hellhound.Client,
   session: hellhound.Session,
 ) -> List(String) {
-  let assert Ok(current) = hellhound.current_identity(client, session, bound())
+  let assert Ok(current) =
+    hellhound.current_identity(client, session, bound(client))
   roles(hellhound.current_claims(current))
 }
 
 // --- claims_age ------------------------------------------------------------
 
 pub fn claims_age_refuses_less_than_a_minute_test() {
-  assert hellhound.claims_age(duration.seconds(59)) == Error(Nil)
+  let provider = support.provider_start(support.Standard)
+  let client = start(settings(provider))
+  let age = fn(seconds) {
+    hellhound.claims_age(client, duration.seconds(seconds))
+  }
+  assert age(59) == Error(Nil)
   // The default clock tolerance.
-  assert hellhound.claims_age(duration.seconds(5)) == Error(Nil)
-  assert hellhound.claims_age(duration.seconds(0)) == Error(Nil)
-  assert hellhound.claims_age(duration.seconds(-900)) == Error(Nil)
-  let assert Ok(_) = hellhound.claims_age(duration.seconds(60))
-  let assert Ok(_) = hellhound.claims_age(duration.minutes(15))
+  assert age(5) == Error(Nil)
+  assert age(0) == Error(Nil)
+  assert age(-900) == Error(Nil)
+  let assert Ok(_) = age(60)
+  let assert Ok(_) = age(900)
+  hellhound.stop(client)
+  support.provider_stop(provider)
+}
+
+/// The bound must be greater than the clock tolerance of the client it is
+/// built from.
+pub fn claims_age_refuses_a_bound_within_the_clock_tolerance_test() {
+  let provider = support.provider_start(support.Standard)
+  let client =
+    start(
+      settings(provider) |> config.with_clock_tolerance(duration.seconds(120)),
+    )
+  let age = fn(seconds) {
+    hellhound.claims_age(client, duration.seconds(seconds))
+  }
+  assert age(59) == Error(Nil)
+  assert age(60) == Error(Nil)
+  assert age(120) == Error(Nil)
+  let assert Ok(_) = age(121)
+  hellhound.stop(client)
+  support.provider_stop(provider)
 }
 
 // --- Current claims follow every refresh path --------------------------------
@@ -153,7 +181,7 @@ pub fn an_unconfirmed_renewal_recovers_without_a_second_call_test() {
   // Writes during the renewal: the reservation, then the publication.
   faults.lose_ack_of(control, 2)
   let assert Error(hellhound.RefreshUnconfirmed(recovery) as error) =
-    hellhound.current_identity(client, session, bound())
+    hellhound.current_identity(client, session, bound(client))
   assert hellhound.session_error_action(error) == hellhound.Recover
   let requests = support.token_requests(provider)
   let assert Ok(recovered) = hellhound.recover_refresh(client, recovery)
@@ -173,8 +201,9 @@ pub fn claims_within_the_bound_make_no_provider_call_test() {
   let session = logged_in(provider, client)
   let requests = support.token_requests(provider)
   let before = support.now_seconds()
-  let assert Ok(current) = hellhound.current_identity(client, session, bound())
-  let assert Ok(_) = hellhound.current_identity(client, session, bound())
+  let assert Ok(current) =
+    hellhound.current_identity(client, session, bound(client))
+  let assert Ok(_) = hellhound.current_identity(client, session, bound(client))
   assert support.token_requests(provider) == requests
   assert hellhound.subject(hellhound.current_claims(current)) == "subject-1"
   assert hellhound.session_reference(hellhound.current_session(current))
@@ -230,7 +259,8 @@ pub fn an_omitted_id_token_is_not_returned_test() {
   let session = logged_in(provider, client)
   script_refreshes(provider, support.OmitIdToken)
   let error = hellhound.ClaimsNotRenewed(hellhound.NotReturned)
-  assert hellhound.current_identity(client, session, bound()) == Error(error)
+  assert hellhound.current_identity(client, session, bound(client))
+    == Error(error)
   assert hellhound.session_error_action(error) == hellhound.Reauthenticate
   // The refresh itself succeeded; the unchecked read still shows the old
   // claims, which is why it decides no permission.
@@ -242,7 +272,7 @@ pub fn an_omitted_id_token_is_not_returned_test() {
     hellhound.logout(client, session, hellhound.default_logout())
   let requests = support.token_requests(provider)
   list.each([session, restored, session], fn(held) {
-    assert hellhound.current_identity(client, held, bound())
+    assert hellhound.current_identity(client, held, bound(client))
       == Error(hellhound.SessionNotFound)
   })
   assert support.token_requests(provider) == requests
@@ -259,7 +289,8 @@ pub fn a_provider_clock_behind_the_bound_is_issued_too_long_ago_test() {
   let session = logged_in(provider, client)
   claims(provider, [issued_ago(950)])
   let error = hellhound.ClaimsNotRenewed(hellhound.IssuedTooLongAgo)
-  assert hellhound.current_identity(client, session, bound()) == Error(error)
+  assert hellhound.current_identity(client, session, bound(client))
+    == Error(error)
   assert hellhound.session_error_action(error) == hellhound.FixConfiguration
   hellhound.stop(client)
   support.provider_stop(provider)
@@ -277,7 +308,8 @@ pub fn a_stored_issue_time_in_the_future_renews_test() {
   support.clock_set(clock, now - 100)
   claims(provider, [#("iat", dynamic.int(now - 100))])
   let requests = support.token_requests(provider)
-  let assert Ok(current) = hellhound.current_identity(client, session, bound())
+  let assert Ok(current) =
+    hellhound.current_identity(client, session, bound(client))
   assert support.token_requests(provider) == requests + 1
   assert hellhound.current_issued_at(current)
     == timestamp.from_unix_seconds(now - 100)
@@ -291,7 +323,7 @@ pub fn a_logged_out_session_fails_test() {
   let session = logged_in(provider, client)
   let assert Ok(_) =
     hellhound.logout(client, session, hellhound.default_logout())
-  assert hellhound.current_identity(client, session, bound())
+  assert hellhound.current_identity(client, session, bound(client))
     == Error(hellhound.SessionNotFound)
   hellhound.stop(client)
   support.provider_stop(provider)
@@ -310,7 +342,8 @@ pub fn a_session_without_a_refresh_token_must_reauthenticate_test() {
     hellhound.complete_login(client, authorize(provider, redirect, "code-1"))
   let requests = support.token_requests(provider)
   let error = hellhound.RefreshTokenUnavailable
-  assert hellhound.current_identity(client, session, bound()) == Error(error)
+  assert hellhound.current_identity(client, session, bound(client))
+    == Error(error)
   assert hellhound.session_error_action(error) == hellhound.Reauthenticate
   assert support.token_requests(provider) == requests
   hellhound.stop(client)
@@ -349,7 +382,7 @@ pub fn a_refreshed_acr_does_not_change_the_login_acr_test() {
   assert text("department") == Ok("finance")
   assert text("acr") == Ok("urn:example:password")
   let assert Ok(current) =
-    hellhound.current_identity(client, access.session, bound())
+    hellhound.current_identity(client, access.session, bound(client))
   assert hellhound.acr(hellhound.current_claims(current))
     == Some("urn:example:mfa")
   hellhound.stop(client)
@@ -372,27 +405,31 @@ fn circuit(status: Int, code: String) -> Nil {
   // the outcome is unknown, so that session is quarantined.
   let quarantined =
     Error(hellhound.RefreshQuarantined(hellhound.ProviderOutcomeUnknown))
-  assert hellhound.current_identity(client, first, bound()) == quarantined
+  assert hellhound.current_identity(client, first, bound(client)) == quarantined
   assert support.token_requests(provider) == requests + 1
   // For 60 s this node starts no renewal: the others keep their sessions.
   let paused = hellhound.RefreshNotSent(hellhound.RenewalPaused)
   list.each([second, third, second], fn(session) {
-    assert hellhound.current_identity(client, session, bound()) == Error(paused)
+    assert hellhound.current_identity(client, session, bound(client))
+      == Error(paused)
   })
   assert hellhound.session_error_action(paused) == hellhound.RetryLater
   assert support.token_requests(provider) == requests + 1
   support.clock_set(monotonic, 59_999)
-  assert hellhound.current_identity(client, third, bound()) == Error(paused)
+  assert hellhound.current_identity(client, third, bound(client))
+    == Error(paused)
   // After the window, a session found already quarantined is reported as
   // such, sends nothing and does not open the circuit again.
   support.clock_set(monotonic, 60_000)
-  assert hellhound.current_identity(client, first, bound()) == quarantined
+  assert hellhound.current_identity(client, first, bound(client)) == quarantined
   assert support.token_requests(provider) == requests + 1
   // After the window one renewal is admitted. The provider still answers
   // the error, so one more session is quarantined and the circuit reopens.
-  assert hellhound.current_identity(client, second, bound()) == quarantined
+  assert hellhound.current_identity(client, second, bound(client))
+    == quarantined
   assert support.token_requests(provider) == requests + 2
-  assert hellhound.current_identity(client, third, bound()) == Error(paused)
+  assert hellhound.current_identity(client, third, bound(client))
+    == Error(paused)
   // The circuit guards only the bounded read: a forced refresh still goes
   // to the provider while it is open.
   let assert Error(hellhound.RefreshQuarantined(_)) =
@@ -424,14 +461,14 @@ pub fn the_circuit_closes_after_its_window_test() {
   let within = logged_in(provider, client)
   script_refreshes(provider, support.Status(503, "temporarily_unavailable"))
   let assert Error(hellhound.RefreshQuarantined(_)) =
-    hellhound.current_identity(client, first, bound())
+    hellhound.current_identity(client, first, bound(client))
   // The provider is healthy again; scripts are cleared by being replaced.
   script_refreshes(provider, support.Delay(0))
-  assert hellhound.current_identity(client, second, bound())
+  assert hellhound.current_identity(client, second, bound(client))
     == Error(hellhound.RefreshNotSent(hellhound.RenewalPaused))
-  let assert Ok(_) = hellhound.current_identity(client, within, bound())
+  let assert Ok(_) = hellhound.current_identity(client, within, bound(client))
   support.clock_set(monotonic, 60_000)
-  let assert Ok(_) = hellhound.current_identity(client, second, bound())
+  let assert Ok(_) = hellhound.current_identity(client, second, bound(client))
   hellhound.stop(client)
   support.provider_stop(provider)
 }

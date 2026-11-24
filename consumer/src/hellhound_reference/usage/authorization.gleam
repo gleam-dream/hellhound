@@ -21,10 +21,11 @@ import hellhound
 import hellhound/testing
 
 // snips-start: authorization
-/// Built once at startup. The bound is the application's policy; Hellhound
-/// has no default. `claims_age` refuses less than 60 s.
-pub fn role_claims_age() -> hellhound.ClaimsAge {
-  let assert Ok(age) = hellhound.claims_age(duration.minutes(15))
+/// Built once at startup, from the client it is used with. The bound is the
+/// application's policy; Hellhound has no default. `claims_age` refuses less
+/// than 60 s, and a bound not greater than the client's clock tolerance.
+pub fn role_claims_age(client: hellhound.Client) -> hellhound.ClaimsAge {
+  let assert Ok(age) = hellhound.claims_age(client, duration.minutes(15))
   age
 }
 
@@ -124,8 +125,8 @@ pub fn run() -> Nil {
     let assert Ok(session) = hellhound.complete_login(client, callback)
     session
   }
-  let age = role_claims_age()
-  assert hellhound.claims_age(duration.seconds(59)) == Error(Nil)
+  let age = role_claims_age(client)
+  assert hellhound.claims_age(client, duration.seconds(59)) == Error(Nil)
 
   // Two sign-ins. The provider's clock ran 8 minutes behind for the first,
   // so its claims are 8 minutes old.
@@ -146,7 +147,7 @@ pub fn run() -> Nil {
   // A stricter bound for a sensitive route; bounds compose per call. The
   // older claims are past it: the check renews them once, and the removed
   // role is denied.
-  let assert Ok(strict) = hellhound.claims_age(duration.minutes(5))
+  let assert Ok(strict) = hellhound.claims_age(client, duration.minutes(5))
   assert require_role(client, old, strict, "approver") == Denied
   assert require_role(client, old, strict, "operator") == Allowed
   assert testing.requests(provider).refresh_grants == 1
