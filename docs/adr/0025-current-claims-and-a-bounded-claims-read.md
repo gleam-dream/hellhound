@@ -1,0 +1,41 @@
+# Sessions read current claims, and one read bounds their age
+
+<a id="adr-0025"></a>
+
+- **Decision:** a session has login claims and current claims. The login claims are those of the login ID token; they are stored apart and never replaced. The current claims are those of the stored ID token, which a refresh that returns a verified ID token already replaces. Every session read returns the current claims. `authentication_time`, `acr` and `amr` read the login claims, and every other accessor and `decode_claims` read the current claims. `current_identity(client, session, claims_age)` returns an opaque `Current` only when the current claims were issued within the caller's bound, and renews them with one shared refresh when they were not.
+- **Need:** a service keeps people signed in until the refresh token, the idle lifetime or the absolute lifetime ends the session. Hellhound 0.2.3 verified and stored the refreshed ID token, yet every session read returned the login claims, so a role removed at the provider kept working until the next login, up to the absolute lifetime.
+- **Supersedes:** only the Continuity clause of [ADR 0005](0005-refresh-uncertainty.md), in one sentence: "missing refreshed ID token preserves identity without a new authentication event". It now reads: a missing refreshed ID token leaves the current claims as they were, and a present one replaces them whole, without a new authentication event. The rest of that clause stands: a present ID token retains the original issuer, subject, audience, authorized party, nonce and authentication time; an omitted refresh token is retained; scope sets stay unchanged. ADR 0005's Decision, lease consequence and access policy are untouched: no rotation or quarantine rule changes, and a possibly sent refresh still quarantines.
+- **Within ADR 0006:** `current_identity` bounds the age of evidence. It reads no role, maps no claim and decides no permission. The application still decodes its own values, chooses its bound, and decides what the claims permit. `Current` marks that the read was checked, in the same way `VerifiedIdentity` marks that the claims were verified; neither is a grant.
+- **Replacement is whole:** a claim missing from the refreshed token is gone, and a missing roles claim means no roles. A record without a readable stored ID token reads the login claims and the login issue time, so the stored record format does not change and 0.2.x and 0.3.0 read the same records in both directions.
+- **The bound:** `claims_age(duration)` builds a checked `ClaimsAge` and refuses less than 60 s. That floor is above the default clock tolerance of 5 s. The constructor takes no client, so it cannot compare the bound with a tolerance configured at 60 s or more; such a client is outside what the constructor checks. The bound is an argument, with no configuration key and no default, because it is application policy and may differ by route. Claims pass when their `iat` is within the bound and not later than now plus the clock tolerance. Past the bound the read refreshes from the current custody revision and checks again: `ClaimsNotRenewed(NotReturned)` when no ID token came back (Reauthenticate), `ClaimsNotRenewed(IssuedTooLongAgo)` when a just-issued token is already past the bound (FixConfiguration). `RefreshUnconfirmed` is returned as it is (Recover).
+- **Renewal circuit:** after a renewal that `current_identity` dispatched ends in quarantine, the same node starts no renewal from `current_identity` for 60 s and returns `RefreshNotSent(RenewalPaused)` (RetryLater). The provider cache process holds this state, per node and per cache incarnation. `access_token` and `refresh` are unchanged. The bound is at most one quarantined session per node per window, plus renewals already in flight.
+- **Telemetry:** the refresh event gains `claims: Replaced | NotReturned`. Its record type is public, so this is a breaking change.
+- **Consequences:** every consumer reads current claims after a version bump. Past the bound, every role-checked request depends on the provider: an outage that is never reached is RetryLater, and a brown-out answered with 5xx, 429 or a timeout after send quarantines the few sessions the circuit admits. A provider that never returns an ID token on refresh forces a new login once per bound. Profile claims may be thinner after a refresh. The bound limits the age of the last issued ID token; whether a removed role disappears depends on the provider re-evaluating claims on refresh.
+- **Rejected alternatives:**
+  - A wrapper, fork or workaround in the service: the owner ruled that the fix is upstream.
+  - UserInfo on each check: a provider call per decision, unsigned, and it disagrees with session reads.
+  - Roles from the access token (`hellhound/resource`): that token belongs to the API, and its freshness follows the token's lifetime.
+  - Access-token lifetime as the bound: it ties a security property to a provider dashboard setting.
+  - Each service writes the renewal sequence: every application rebuilds the same subtle rule (shared refresh, missing ID token, retry-later).
+  - Merging refreshed claims into the old ones: it keeps a removed role alive when a provider omits the claim.
+  - Opt-in replacement: the default would stay stale.
+  - Returning the refreshed identity separately from the session: a second copy that drifts.
+  - A configured limit with a default: it breaks valid configurations and puts application policy in configuration.
+  - Checking and renewing inside `access_token`, with a throttle: it misses `restore_session` and cached reads, and one failure spends the renewal.
+  - `IdentityStale` as an `access_token` error: it withholds a valid token from handlers that read no roles.
+  - Settling 429 as not sent, plus a client-wide pause: it overturns the rotation invariant, needs header plumbing, and changes `access_token` for every consumer.
+  - Rejecting a refreshed token with an earlier `iat`: the age re-check already enforces the bound.
+  - In-call recovery of an unconfirmed publication: a second unconfirmed result would drop the rotated refresh token.
+  - An open `Current` record: it can be forged, so it marks nothing.
+  - A stale error carrying claims: it invites using them.
+  - A separate `Authentication` type: two reads of the same facts.
+  - Removing `session_identity`: it breaks about 50 call sites for a policy one service sets.
+  - A stored copy of the current claims, or `acr` and `amr` copied into stored evidence: a duplicate of the stored token, or lost when 0.2.x saves the record again.
+  - A recorded failed-renewal state or attempt timestamp: a record format change; `logout` on Reauthenticate and the circuit bound the repeats instead.
+  - `Access.identity_change`, a one-shot change event: delivered at most once, so it is lost on a crash or a recovery.
+  - A per-read telemetry event: it duplicates the refresh event and fires on every request.
+  - Redirect renewal (`prompt=none`): it skips non-GET requests and breaks XHR.
+  - Silently keeping old claims when no ID token returns: it defeats the bound.
+  - Idle polling from long-lived connections: it defeats the idle timeout.
+- **Unresolved:** whether a 429 should settle as not sent is deferred with the rotation rules unchanged. `invalid_scope` after expiry is still retried per request. One `VerifiedIdentity` type reading two claim sets was contested in review and kept, with the three login-pinned accessors documented.
+- **Provenance:** the accepted concept brief for Hellhound 0.3.0 (2026-11-24) and its five review rounds; retained bounded-read, replacement, circuit and test-provider tests, and the reference consumer's permission check.
