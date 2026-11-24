@@ -342,7 +342,7 @@ pub opaque type Message {
   Discovery(process.Pid, Result(Discovered, Failure))
   FetchExited(process.Down)
   RenewalAdmission(reply: Subject(Bool))
-  RenewalQuarantined
+  PauseRenewals
 }
 
 /// Network fetches run in a separate process, one at a time, so the actor
@@ -388,8 +388,8 @@ pub type Provider {
 /// The design's defaults table owns this value.
 const key_refresh_cooldown_ms = 30_000
 
-/// How long the renewal circuit stays open after a claims renewal ended in
-/// quarantine. The design's defaults table owns this value.
+/// How long the renewal circuit stays open after a claims renewal met a
+/// provider fault. The design's defaults table owns this value.
 const renewal_pause_ms = 60_000
 
 /// Delay before retrying a reload that found another fetch in flight.
@@ -519,7 +519,7 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
         }
       }
     }
-    RenewalQuarantined ->
+    PauseRenewals ->
       actor.continue(
         State(
           ..state,
@@ -726,11 +726,12 @@ pub fn renewal_admitted(provider: Provider) -> Bool {
   }
 }
 
-/// Open the renewal circuit: a claims renewal that was dispatched ended in
-/// quarantine. This incarnation admits no further claims renewal for
+/// Open the renewal circuit: a claims renewal that was dispatched ended with
+/// the provider's outcome unknown, or returned an ID token already past the
+/// bound. This incarnation admits no further claims renewal for
 /// `renewal_pause_ms`.
-pub fn renewal_quarantined(provider: Provider) -> Nil {
-  process.send(provider.subject, RenewalQuarantined)
+pub fn pause_renewals(provider: Provider) -> Nil {
+  process.send(provider.subject, PauseRenewals)
 }
 
 /// The same provider with calls bounded by `timeout` milliseconds.

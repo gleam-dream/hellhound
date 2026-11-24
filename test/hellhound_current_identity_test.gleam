@@ -281,17 +281,33 @@ pub fn an_omitted_id_token_is_not_returned_test() {
 }
 
 /// A provider clock behind by more than the bound: the token just issued
-/// is already too old. An operator must act.
+/// is already too old. An operator must act. The next token would be too
+/// old as well, so the node pauses renewals: the fault costs one refresh per
+/// window, not one per request.
 pub fn a_provider_clock_behind_the_bound_is_issued_too_long_ago_test() {
   let provider = support.provider_start(support.Standard)
   claims(provider, [issued_ago(1000)])
-  let client = start(settings(provider))
+  let monotonic = support.clock_new(0)
+  let client =
+    start(settings(provider) |> support.with_monotonic_clock(monotonic))
   let session = logged_in(provider, client)
+  let other = logged_in(provider, client)
   claims(provider, [issued_ago(950)])
+  let requests = support.token_requests(provider)
   let error = hellhound.ClaimsNotRenewed(hellhound.IssuedTooLongAgo)
   assert hellhound.current_identity(client, session, bound(client))
     == Error(error)
   assert hellhound.session_error_action(error) == hellhound.FixConfiguration
+  assert support.token_requests(provider) == requests + 1
+  let paused = Error(hellhound.RefreshNotSent(hellhound.RenewalPaused))
+  assert hellhound.current_identity(client, session, bound(client)) == paused
+  assert hellhound.current_identity(client, other, bound(client)) == paused
+  assert support.token_requests(provider) == requests + 1
+  // After the window one renewal is sent again.
+  support.clock_set(monotonic, 60_000)
+  assert hellhound.current_identity(client, other, bound(client))
+    == Error(error)
+  assert support.token_requests(provider) == requests + 2
   hellhound.stop(client)
   support.provider_stop(provider)
 }
@@ -445,6 +461,27 @@ pub fn a_503_quarantines_one_session_and_pauses_the_rest_test() {
 
 pub fn a_429_quarantines_one_session_and_pauses_the_rest_test() {
   circuit(429, "slow_down")
+}
+
+/// A response rejected for one session says nothing about the provider: that
+/// session is quarantined, and the others still renew.
+pub fn a_rejected_response_does_not_pause_other_sessions_test() {
+  let provider = support.provider_start(support.Standard)
+  claims(provider, [issued_ago(1000)])
+  let client = start(settings(provider))
+  let first = logged_in(provider, client)
+  script_refreshes(provider, support.MalformedJson)
+  let second = logged_in(provider, client)
+  claims(provider, [])
+  assert hellhound.current_identity(client, first, bound(client))
+    == Error(
+      hellhound.RefreshQuarantined(hellhound.ResponseRejected(
+        hellhound.RefreshResponseMalformed,
+      )),
+    )
+  let assert Ok(_) = hellhound.current_identity(client, second, bound(client))
+  hellhound.stop(client)
+  support.provider_stop(provider)
 }
 
 /// The provider recovers within the window: paused sessions renew once the

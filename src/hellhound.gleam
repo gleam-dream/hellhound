@@ -2040,7 +2040,8 @@ pub type SessionError {
   /// The custody store did not answer.
   SessionStoreUnavailable
   /// The stored session did not open (tampering, or an unknown sealing
-  /// key).
+  /// key). An operator must act: the record is kept, and `logout` would
+  /// delete it.
   SessionRecordUnreadable
   /// The session has no access token.
   SessionHasNoAccessToken
@@ -2343,17 +2344,19 @@ pub fn current_issued_at(current: Current) -> Timestamp {
 /// | --- | --- | --- |
 /// | `RetryLater` | Deny this request; keep the session. | not-sent failures, `RefreshNotSent(RenewalPaused)`, store and wait timeouts |
 /// | `Reauthenticate` | Call `logout`, then send the user to sign in. | `ClaimsNotRenewed(NotReturned)`, a quarantined or revoked refresh token, no refresh token, no live session |
-/// | `FixConfiguration` | An operator must act. | `ClaimsNotRenewed(IssuedTooLongAgo)`, a foreign session |
+/// | `FixConfiguration` | An operator must act; keep the session. | `ClaimsNotRenewed(IssuedTooLongAgo)`, a stored session that did not open, a foreign session |
 /// | `Recover` | Call `recover_refresh`, then `current_identity` again. | `RefreshUnconfirmed` |
 ///
 /// Calling `logout` on `Reauthenticate` ends the session, so a renewal that
 /// cannot succeed is not sent again on every request.
 ///
-/// Renewal circuit: when a renewal this function dispatched ends in
-/// quarantine (the provider answered 5xx or 429, or timed out after the
-/// request was sent), this node starts no renewal from `current_identity`
-/// for 60 s and returns `RefreshNotSent(RenewalPaused)`. `access_token` and
-/// `refresh` are not affected.
+/// Renewal circuit: when a renewal this function dispatched ends with the
+/// provider's outcome unknown (it answered 5xx or 429, or timed out after
+/// the request was sent), or returns an ID token already past the bound
+/// (`IssuedTooLongAgo`), this node starts no renewal from `current_identity`
+/// for 60 s and returns `RefreshNotSent(RenewalPaused)`. A response rejected
+/// for one session does not open it. `access_token` and `refresh` are not
+/// affected.
 ///
 /// The bound limits the age of the last ID token the provider issued. A
 /// role removed at the provider is denied within the bound only if the
@@ -2377,22 +2380,23 @@ pub fn current_identity(
         True -> {
           let renewal = renew(client, snapshot, False)
           case renewal.result {
-            Error(RefreshQuarantined(_) as error) -> {
-              // Only a renewal this call dispatched opens the circuit; a
-              // session found already quarantined says nothing new about
-              // the provider.
+            Error(RefreshQuarantined(ProviderOutcomeUnknown) as error) -> {
+              // Only an unknown provider outcome opens the circuit, and only
+              // from the renewal that met it: a response rejected for one
+              // session, a lost lease, or a session found already
+              // quarantined says nothing about the provider's health.
               case renewal.dispatched {
-                True -> provider.renewal_quarantined(client.backend.provider)
+                True -> provider.pause_renewals(client.backend.provider)
                 False -> Nil
               }
               Error(error)
             }
             Error(error) -> Error(error)
             Ok(access) ->
-              within_claims_age(client, access.session, claims_age)
-              |> result.replace_error(
-                ClaimsNotRenewed(
-                  case
+              case within_claims_age(client, access.session, claims_age) {
+                Ok(current) -> Ok(current)
+                Error(Nil) -> {
+                  let reason = case
                     redacted.reveal(access.session.identity.claims)
                     == redacted.reveal(held.identity.claims)
                   {
@@ -2400,9 +2404,18 @@ pub fn current_identity(
                     // replaced them.
                     True -> NotReturned
                     False -> IssuedTooLongAgo
-                  },
-                ),
-              )
+                  }
+                  // A token issued already past the bound will be issued
+                  // that way again: pause, so the fault costs one refresh
+                  // per window and not one per request.
+                  case reason, renewal.dispatched {
+                    IssuedTooLongAgo, True ->
+                      provider.pause_renewals(client.backend.provider)
+                    _, _ -> Nil
+                  }
+                  Error(ClaimsNotRenewed(reason))
+                }
+              }
           }
         }
       }
@@ -2852,7 +2865,11 @@ fn quarantine_from(name: String) -> QuarantineReason {
 /// retry of the same request.
 pub fn session_error_action(error: SessionError) -> Action {
   case error {
-    SessionNotFound | SessionLost | SessionRecordUnreadable -> Reauthenticate
+    SessionNotFound | SessionLost -> Reauthenticate
+    // The record is there and this node cannot open it, which an unknown
+    // sealing key causes for every session at once. Signing in again would
+    // delete records that the right key still opens.
+    SessionRecordUnreadable -> FixConfiguration
     SessionHasNoAccessToken | RefreshTokenUnavailable | RefreshRevoked ->
       Reauthenticate
     RefreshQuarantined(_) -> Reauthenticate

@@ -233,7 +233,7 @@
     #behavior(title: "Competing reads past the bound share one renewal", area: "Bounded claims read", level: "boundary")[#given[A live session's current claims are past the bound.] #when[Several callers read the current identity, with current or older session values.] #then[Exactly one refresh is dispatched.] #then[Every caller receives the renewed claims.]]
     #behavior(title: "A renewal without an ID token returns no claims", area: "Bounded claims read", level: "boundary")[#given[The current claims are past the bound.] #when[The refresh response omits the ID token.] #then[The read fails as not renewed and the caller action is reauthentication.] #then[After the application ends the session, further reads send nothing.]]
     #behavior(title: "A just-issued token past the bound is an operator problem", area: "Bounded claims read", level: "boundary")[#given[The provider's clock is behind by more than the bound.] #when[A renewal returns a verified ID token.] #then[The read fails as issued too long ago and the caller action is to fix configuration.]]
-    #behavior(title: "A quarantined renewal pauses further renewals", area: "Bounded claims read", level: "boundary")[#given[A renewal dispatched by the bounded read ended in quarantine.] #when[Other sessions past the bound are read on the same node within the window.] #then[They fail as paused without a provider request and keep their sessions.] #then[Access and forced refresh are unaffected.]]
+    #behavior(title: "A provider fault met by a renewal pauses further renewals", area: "Bounded claims read", level: "boundary")[#given[A renewal dispatched by the bounded read ended with the provider's outcome unknown, or returned an ID token already past the bound.] #when[Other sessions past the bound are read on the same node within the window.] #then[They fail as paused without a provider request and keep their sessions.] #then[Access and forced refresh are unaffected.]]
   ]
 ])
 #section(title: "Resource validation and provider operations", lead: "Checked access claims, service grants and introspection are independent of browser identity.", body: [
@@ -334,7 +334,7 @@
       [refresh lease], [request timeout + 2 × store timeout + 1 s], [none],
       [resend after a possible send], [never, for authorization codes and refresh tokens], [none],
       [claims age bound of a checked read], [no default; at least 60 s and greater than the client's clock tolerance], [`hellhound.claims_age`, passed to `current_identity`],
-      [renewal circuit after a quarantined claims renewal], [60 s per node and cache incarnation], [none],
+      [renewal circuit after a claims renewal met a provider fault], [60 s per node and cache incarnation], [none],
       [logout revocation], [refresh token revoked under RFC 7009], [`LogoutOptions(revocation:)`],
       [install-recovery horizon and logout tombstones], [the login lifetime], [none],
       [expired-record sweep], [every 60 s], [none],
@@ -362,7 +362,7 @@
       [store call], [5 s worker deadline default], [kill worker, wait DOWN up to 1 s, drain late reply; accepted external effect can remain unknown],
       [refresh wait], [5 s default], [RefreshWaitTimedOut; no dispatch permission],
       [refresh lease], [request +2×store timeout +1 s], [Orphaned quarantine; not resend permission],
-      [renewal circuit], [60 s from the quarantined renewal], [RenewalPaused for the bounded claims read only; no dispatch permission is created or withdrawn],
+      [renewal circuit], [60 s from the renewal that met the fault], [RenewalPaused for the bounded claims read only; no dispatch permission is created or withdrawn],
       [stop], [5 s supervisor observation], [Nil on exit or expiry; worker notification can follow supervisor exit],
       [storage sweeping], [60 s cadence], [logical expiry already denies use],
     ))
@@ -383,7 +383,7 @@
     [Reauthenticate], [Start a new login; never replay a possibly sent code or quarantined refresh token. After a bounded claims read, end the session first.],
     [RetryLater], [No final decision; repeat only the operation whose contract permits it. A bounded claims read denies the request and keeps the session.],
     [Recover], [Submit carried custody or refresh publication recovery; never call provider again. A bounded claims read is then repeated.],
-    [FixConfiguration], [Operator/configuration issue such as foreign owner, unsupported authentication or a just-issued ID token already past the claims age bound.],
+    [FixConfiguration], [Operator/configuration issue such as foreign owner, unsupported authentication, a stored session that does not open, or a just-issued ID token already past the claims age bound. The session is kept.],
     [RejectRequest], [Incoming request is invalid and should not be retried.],
   ))
   #points([Error unions and protocol registries may gain variants; Action is the stable closed handling boundary. Use describe functions rather than inspecting raw error material.], [A provider status is not universally definite non-action. Refresh maps only recognized safe refusal evidence to release; possible processing and invalid success quarantine.], [Claims or endpoint error descriptions are never embedded in ordinary errors. Known claim names and missing required scope names are safe typed diagnostics, not raw provider payloads.])

@@ -35,10 +35,13 @@ format is unchanged: 0.2.x and 0.3.0 read the same records, in both directions.
   checked bound, built from the client it is used with. It refuses less than
   60 s, and a bound not greater than that client's clock tolerance. There is no
   default and no configuration key.
-- A renewal circuit. After a renewal started by `current_identity` ends in
-  quarantine, that node starts no renewal from `current_identity` for 60 s and
-  returns `RefreshNotSent(RenewalPaused)`. `access_token` and `refresh` are not
-  affected, and no rotation or quarantine rule changed.
+- A renewal circuit. After a renewal started by `current_identity` ends with
+  the provider's outcome unknown (a 5xx, a 429, or a timeout after the request
+  was sent), or returns an ID token already past the bound, that node starts no
+  renewal from `current_identity` for 60 s and returns
+  `RefreshNotSent(RenewalPaused)`. A response rejected for one session does not
+  open it. `access_token` and `refresh` are not affected, and no rotation or
+  quarantine rule changed.
 - `hellhound/testing`: `RefreshAnswer`, `with_refresh_answer` and
   `set_refresh_answer` script the refresh grant: with or without an ID token,
   or a 503 or 429 that leaves the grant untouched. The default is unchanged
@@ -49,6 +52,11 @@ format is unchanged: 0.2.x and 0.3.0 read the same records, in both directions.
 - `SessionError` gains `ClaimsNotRenewed(NotRenewedReason)`, with
   `NotReturned` (Reauthenticate) and `IssuedTooLongAgo` (FixConfiguration).
   Only `current_identity` returns it.
+- `session_error_action(SessionRecordUnreadable)` is `FixConfiguration`; it
+  was `Reauthenticate`. A stored session that does not open is most often an
+  unknown sealing key, which affects every session at once, and `logout` on
+  `Reauthenticate` would delete records that the right key still opens. Deny
+  the request, keep the session and alert an operator.
 - `ProviderFailure` gains `RenewalPaused` (RetryLater). Only `current_identity`
   returns it, inside `RefreshNotSent`.
 - `telemetry.Refresh` gains the field `claims: RefreshClaims`, `Replaced` or
@@ -72,7 +80,8 @@ format is unchanged: 0.2.x and 0.3.0 read the same records, in both directions.
    - on `Reauthenticate`, call `logout` before redirecting to sign-in;
    - on `RetryLater`, deny the request and keep the session;
    - on `Recover`, call `recover_refresh`, then `current_identity` again;
-   - on `FixConfiguration`, alert an operator.
+   - on `FixConfiguration`, deny the request, keep the session and alert an
+     operator.
 4. **Provider and deployment.** The bound limits the age of the last ID token.
    A removed role is denied within it only if your provider evaluates claims
    again on refresh and returns an ID token, so verify both. Request a refresh
@@ -82,7 +91,14 @@ format is unchanged: 0.2.x and 0.3.0 read the same records, in both directions.
    provider's limits. A long-lived connection calls `current_identity` on each
    incoming message and closes on a timer when the claims pass the bound; it
    does not poll while idle.
-5. **Rolling back.** Pinning 0.2.x again is safe for stored records. Do it only
+5. **Claims that restrict.** Replacement is whole, so it fails closed for a
+   claim that grants (a removed role is gone) and open for a claim that
+   restricts. A claim such as `restricted` or `mfa_required` that your provider
+   adds only at interactive login is absent from the first refreshed ID token,
+   and the restriction disappears with it. Make the provider emit such a claim
+   on refresh as well, or read it from the login's values and not from the
+   current claims.
+6. **Rolling back.** Pinning 0.2.x again is safe for stored records. Do it only
    before you rely on claim replacement to remove permissions, because 0.2.x
    reads the login's claims and would give removed roles back.
 

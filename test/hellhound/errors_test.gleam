@@ -90,6 +90,10 @@ pub fn every_session_error_describes_itself_and_has_an_action_test() {
     == hellhound.RetryLater
   assert hellhound.session_error_action(hellhound.SessionStoreUnavailable)
     == hellhound.RetryLater
+  // A record this node cannot open is the operator's to fix: signing in
+  // again would delete a record that the right sealing key still opens.
+  assert hellhound.session_error_action(hellhound.SessionRecordUnreadable)
+    == hellhound.FixConfiguration
 }
 
 pub fn other_errors_describe_themselves_test() {
