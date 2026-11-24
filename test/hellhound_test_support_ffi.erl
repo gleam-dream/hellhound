@@ -1,7 +1,7 @@
 %% Test support exposed to Gleam tests.
 -module(hellhound_test_support_ffi).
 
--export([mint/3, rsa_jwk/2, jwk_with/3, mailbox_size/0, client_private_jwk/0, adapter_request/2, server_start/2, server_url/2, server_requests/1, server_stop/1, ca_der/0, worker_kill/1, worker_alive/1, atom_count/0, process_count/0, form_login/3, print/1, node_reset/0, node_next/2, node_log/0, keycloak_logout/1, clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
+-export([mint/3, rsa_jwk/2, jwk_with/3, mailbox_size/0, client_private_jwk/0, adapter_request/2, server_start/2, server_url/2, server_requests/1, server_stop/1, ca_der/0, worker_kill/1, worker_alive/1, atom_count/0, process_count/0, form_login/3, print/1, node_reset/0, node_next/2, node_log/0, keycloak_logout/1, keycloak_realm_role/3, clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
 
 ca_pem() ->
     Dir = hellhound_test_server:pki_dir(),
@@ -119,6 +119,32 @@ keycloak_logout(Url) ->
         _ ->
             {error, nil}
     end.
+
+%% Grant or revoke a realm role through Keycloak's admin REST API, as an
+%% administrator would. Both directions are idempotent.
+keycloak_realm_role(User, Role, Change) ->
+    {ok, _} = application:ensure_all_started([inets, ssl]),
+    Base = "https://localhost:18443",
+    Http = [{ssl, node_ssl()}],
+    Form = "grant_type=password&client_id=admin-cli&username=admin&password=admin-disposable",
+    {ok, {{_, 200, _}, _, TokenBody}} =
+        httpc:request(post, {Base ++ "/realms/master/protocol/openid-connect/token", [],
+                             "application/x-www-form-urlencoded", Form}, Http, [{body_format, binary}]),
+    #{<<"access_token">> := Token} = json:decode(TokenBody),
+    Auth = [{"authorization", "Bearer " ++ binary_to_list(Token)}],
+    Admin = Base ++ "/admin/realms/hellhound",
+    Get = fun(Path) ->
+        {ok, {{_, 200, _}, _, Body}} = httpc:request(get, {Admin ++ Path, Auth}, Http, [{body_format, binary}]),
+        json:decode(Body)
+    end,
+    [#{<<"id">> := UserId}] = Get("/users?exact=true&username=" ++ binary_to_list(User)),
+    Representation = Get("/roles/" ++ binary_to_list(Role)),
+    Method = case Change of grant -> post; revoke -> delete end,
+    Mappings = Admin ++ "/users/" ++ binary_to_list(UserId) ++ "/role-mappings/realm",
+    {ok, {{_, 204, _}, _, _}} =
+        httpc:request(Method, {Mappings, Auth, "application/json", iolist_to_binary(json:encode([Representation]))},
+                      Http, []),
+    nil.
 
 %% node-oidc-provider control API.
 node_url(Path) -> "https://localhost:19443/__control/" ++ Path.

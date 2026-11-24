@@ -146,6 +146,20 @@ pub fn refresh_tokens(provider: Provider) -> List(String)
 @external(erlang, "hellhound_test_support_ffi", "keycloak_logout")
 pub fn keycloak_logout(url: String) -> Result(BrowserResult, Nil)
 
+pub type RoleChange {
+  Grant
+  Revoke
+}
+
+/// Grant or revoke a realm role of a user in the pinned Keycloak, through
+/// its admin REST API. Idempotent in both directions.
+@external(erlang, "hellhound_test_support_ffi", "keycloak_realm_role")
+pub fn keycloak_realm_role(
+  user: String,
+  role: String,
+  change: RoleChange,
+) -> Nil
+
 pub type NodeAction {
   NodeIdToken(String)
   NodeOmitIdToken
