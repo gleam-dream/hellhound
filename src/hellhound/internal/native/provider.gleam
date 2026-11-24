@@ -341,8 +341,42 @@ pub opaque type Message {
   Reloaded(process.Pid, Result(Discovered, Failure))
   Discovery(process.Pid, Result(Discovered, Failure))
   FetchExited(process.Down)
-  RenewalAdmission(reply: Subject(Bool))
-  PauseRenewals
+  RenewalAdmission(lease_ms: Int, reply: Subject(Admission))
+  RenewalReported(admission: Admission, verdict: Verdict)
+}
+
+/// The answer to a claims renewal that asks to start.
+pub type Admission {
+  /// The circuit is closed.
+  Admitted
+  /// The window ended: this renewal is the one probe. Its report closes the
+  /// circuit or opens it again.
+  Probe
+  /// The circuit is open, or its probe is in flight. Nothing is sent.
+  Paused
+}
+
+/// What an admitted claims renewal learned about the provider.
+pub type Verdict {
+  /// The provider answered the refresh with something this node could act
+  /// on.
+  Answered
+  /// The provider is not serving claims renewals: its outcome was unknown,
+  /// it rate-limited, or the ID token it returned cannot satisfy the bound.
+  Faulted
+  /// The provider was not reached, or another request's refresh was used.
+  NothingLearned
+}
+
+/// The renewal circuit of one cache incarnation.
+type Circuit {
+  Closed
+  /// No claims renewal starts before `until` (monotonic milliseconds). The
+  /// first one after it is the probe.
+  Open(until: Int)
+  /// One probe is in flight. If it has not reported by `until`, it is taken
+  /// as lost and the next renewal becomes the probe.
+  Probing(until: Int)
 }
 
 /// Network fetches run in a separate process, one at a time, so the actor
@@ -372,8 +406,7 @@ type State {
     backoff_ms: Int,
     /// Monotonic milliseconds when the last unknown-key refresh started.
     last_key_refresh: Option(Int),
-    /// Monotonic milliseconds until which the renewal circuit is open.
-    renewals_paused_until: Option(Int),
+    renewals: Circuit,
     /// Monotonic milliseconds; a test seam.
     now: fn() -> Int,
     fetch: Fetch,
@@ -423,7 +456,7 @@ pub fn start(
       initial: Pending(None),
       backoff_ms: first_backoff_ms,
       last_key_refresh: None,
-      renewals_paused_until: None,
+      renewals: Closed,
       now:,
       fetch: Idle,
     ))
@@ -506,25 +539,33 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       process.send(reply, snapshot(state))
       actor.continue(state)
     }
-    RenewalAdmission(reply) -> {
+    RenewalAdmission(lease_ms, reply) -> {
       let now = state.now()
-      case state.renewals_paused_until {
-        Some(until) if until > now -> {
-          process.send(reply, False)
+      case state.renewals {
+        Closed -> {
+          process.send(reply, Admitted)
           actor.continue(state)
         }
-        _ -> {
-          process.send(reply, True)
-          actor.continue(State(..state, renewals_paused_until: None))
+        Open(until) | Probing(until) if until > now -> {
+          process.send(reply, Paused)
+          actor.continue(state)
+        }
+        // The window ended, or the probe never reported: one probe.
+        Open(_) | Probing(_) -> {
+          process.send(reply, Probe)
+          actor.continue(State(..state, renewals: Probing(now + lease_ms)))
         }
       }
     }
-    PauseRenewals ->
+    RenewalReported(admission, verdict) ->
       actor.continue(
-        State(
-          ..state,
-          renewals_paused_until: Some(state.now() + renewal_pause_ms),
-        ),
+        State(..state, renewals: case verdict, admission, state.renewals {
+          Faulted, _, _ -> Open(state.now() + renewal_pause_ms)
+          Answered, Probe, Probing(_) -> Closed
+          // The probe sent nothing: the next renewal probes in its place.
+          NothingLearned, Probe, Probing(_) -> Open(state.now())
+          _, _, renewals -> renewals
+        }),
       )
     Discover ->
       case state.fetch {
@@ -716,22 +757,29 @@ pub fn refresh_keys(provider: Provider) -> Result(Snapshot, Failure) {
   }
 }
 
-/// Whether a refresh made only to renew claims may start. `False` while the
-/// renewal circuit is open. A cache that does not answer admits the renewal:
-/// the refresh then fails as not ready, and nothing is sent.
-pub fn renewal_admitted(provider: Provider) -> Bool {
-  case call.call(provider.subject, provider.timeout, RenewalAdmission) {
-    Ok(admitted) -> admitted
-    Error(_) -> True
+/// Ask to start a refresh made only to renew claims. `Paused` while the
+/// renewal circuit is open or its probe is in flight. `lease_ms` is how long
+/// a probe may take before it is taken as lost. A cache that does not answer
+/// admits the renewal: the refresh then fails as not ready, and nothing is
+/// sent. Report every admitted renewal with `renewal_reported`.
+pub fn admit_renewal(provider: Provider, lease_ms: Int) -> Admission {
+  case
+    call.call(provider.subject, provider.timeout, RenewalAdmission(lease_ms, _))
+  {
+    Ok(admission) -> admission
+    Error(_) -> Admitted
   }
 }
 
-/// Open the renewal circuit: a claims renewal that was dispatched ended with
-/// the provider's outcome unknown, or returned an ID token already past the
-/// bound. This incarnation admits no further claims renewal for
-/// `renewal_pause_ms`.
-pub fn pause_renewals(provider: Provider) -> Nil {
-  process.send(provider.subject, PauseRenewals)
+/// Report how an admitted claims renewal ended. `Faulted` opens the circuit
+/// for `renewal_pause_ms`, whatever its state. A probe that was `Answered`
+/// closes it.
+pub fn renewal_reported(
+  provider: Provider,
+  admission: Admission,
+  verdict: Verdict,
+) -> Nil {
+  process.send(provider.subject, RenewalReported(admission, verdict))
 }
 
 /// The same provider with calls bounded by `timeout` milliseconds.

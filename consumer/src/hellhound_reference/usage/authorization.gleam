@@ -37,7 +37,7 @@ pub type Decision {
   TryAgainLater
   /// The session was ended: send the person to sign in.
   SignInAgain
-  /// An operator must act: deny, and alert.
+  /// An operator must act: deny, keep the session, and alert.
   Misconfigured
 }
 
@@ -84,8 +84,8 @@ fn denied(
       TryAgainLater
     }
     hellhound.Recover, _ | hellhound.RetryLater, _ -> TryAgainLater
-    // End the session before redirecting, so a renewal that cannot succeed
-    // is not sent again on every request.
+    // The session cannot be used again (its refresh token is revoked or
+    // quarantined, or it is gone): end it before redirecting.
     hellhound.Reauthenticate, _ -> {
       let _ = hellhound.logout(client, session, hellhound.default_logout())
       SignInAgain
@@ -152,15 +152,20 @@ pub fn run() -> Nil {
   assert require_role(client, old, strict, "operator") == Allowed
   assert testing.requests(provider).refresh_grants == 1
 
-  // A provider that returns no ID token on refresh cannot renew claims: the
-  // person signs in again, and the session is gone.
+  // A provider that returns no ID token on refresh cannot renew claims, and
+  // a new login would not change that: the check is denied, the session is
+  // kept, and an operator fixes the provider.
   testing.set_refresh_answer(provider, testing.RefreshWithoutIdToken)
   testing.set_clock_skew(provider, duration.minutes(-8))
   let stale = sign_in()
   testing.set_clock_skew(provider, duration.seconds(0))
-  assert require_role(client, stale, strict, "operator") == SignInAgain
-  assert hellhound.restore_session(client, hellhound.session_reference(stale))
-    == Error(hellhound.SessionNotFound)
+  assert require_role(client, stale, strict, "operator") == Misconfigured
+  let assert Ok(_) =
+    hellhound.restore_session(client, hellhound.session_reference(stale))
+  // The node pauses renewals for a minute, so the fault is not sent to the
+  // provider again on every request.
+  assert require_role(client, stale, strict, "operator") == TryAgainLater
+  assert testing.requests(provider).refresh_grants == 2
   hellhound.stop(client)
   testing.stop_provider(provider)
 }

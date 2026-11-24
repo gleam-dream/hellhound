@@ -199,6 +199,7 @@ pub type RefreshAnswer {
   /// would. Hellhound cannot tell whether the grant was processed.
   RefreshUnavailable
   /// Answer `429` and leave the grant untouched, as a rate limiter would.
+  /// Hellhound keeps the session and returns `RefreshRateLimited`.
   RefreshRateLimited
 }
 

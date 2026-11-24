@@ -9,6 +9,7 @@ import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/list
 import gleam/option.{Some}
+import gleam/result
 import gleam/time/duration
 import gleam/time/timestamp
 import hellhound
@@ -258,24 +259,32 @@ pub fn an_omitted_id_token_is_not_returned_test() {
   let client = start(settings(provider))
   let session = logged_in(provider, client)
   script_refreshes(provider, support.OmitIdToken)
+  let requests = support.token_requests(provider)
   let error = hellhound.ClaimsNotRenewed(hellhound.NotReturned)
   assert hellhound.current_identity(client, session, bound(client))
     == Error(error)
-  assert hellhound.session_error_action(error) == hellhound.Reauthenticate
+  // A new login would not make the provider return an ID token on refresh:
+  // an operator must act, and the session is kept.
+  assert hellhound.session_error_action(error) == hellhound.FixConfiguration
+  assert support.token_requests(provider) == requests + 1
   // The refresh itself succeeded; the unchecked read still shows the old
   // claims, which is why it decides no permission.
   let assert Ok(restored) =
     hellhound.restore_session(client, hellhound.session_reference(session))
   assert roles(hellhound.session_identity(restored)) == ["admin"]
-  // The application ends the session; further reads send nothing.
-  let assert Ok(_) =
-    hellhound.logout(client, session, hellhound.default_logout())
-  let requests = support.token_requests(provider)
+  // The next refresh would end the same way, so the node pauses renewals:
+  // further reads send nothing.
   list.each([session, restored, session], fn(held) {
     assert hellhound.current_identity(client, held, bound(client))
-      == Error(hellhound.SessionNotFound)
+      == Error(hellhound.RefreshNotSent(hellhound.RenewalPaused))
   })
-  assert support.token_requests(provider) == requests
+  assert support.token_requests(provider) == requests + 1
+  // The access token still works, and the application may end the session.
+  let assert Ok(_) = hellhound.access_token(client, restored)
+  let assert Ok(_) =
+    hellhound.logout(client, session, hellhound.default_logout())
+  assert hellhound.current_identity(client, session, bound(client))
+    == Error(hellhound.SessionNotFound)
   hellhound.stop(client)
   support.provider_stop(provider)
 }
@@ -407,7 +416,9 @@ pub fn a_refreshed_acr_does_not_change_the_login_acr_test() {
 
 // --- The renewal circuit -----------------------------------------------------------
 
-fn circuit(status: Int, code: String) -> Nil {
+/// A 503 leaves the outcome unknown: that session is quarantined, and the
+/// node pauses renewals so the others keep theirs.
+pub fn a_503_quarantines_one_session_and_pauses_the_rest_test() {
   let provider = support.provider_start(support.Standard)
   claims(provider, [issued_ago(1000)])
   let monotonic = support.clock_new(0)
@@ -415,7 +426,7 @@ fn circuit(status: Int, code: String) -> Nil {
     start(settings(provider) |> support.with_monotonic_clock(monotonic))
   let sessions = list.map([1, 2, 3, 4], fn(_) { logged_in(provider, client) })
   let assert [first, second, third, fourth] = sessions
-  script_refreshes(provider, support.Status(status, code))
+  script_refreshes(provider, support.Status(503, "temporarily_unavailable"))
   let requests = support.token_requests(provider)
   // The first renewal reaches the provider, which answers with the error:
   // the outcome is unknown, so that session is quarantined.
@@ -435,12 +446,12 @@ fn circuit(status: Int, code: String) -> Nil {
   assert hellhound.current_identity(client, third, bound(client))
     == Error(paused)
   // After the window, a session found already quarantined is reported as
-  // such, sends nothing and does not open the circuit again.
+  // such, sends nothing and learns nothing: the probe is still to come.
   support.clock_set(monotonic, 60_000)
   assert hellhound.current_identity(client, first, bound(client)) == quarantined
   assert support.token_requests(provider) == requests + 1
-  // After the window one renewal is admitted. The provider still answers
-  // the error, so one more session is quarantined and the circuit reopens.
+  // One renewal is the probe. The provider still answers the error, so one
+  // more session is quarantined and the circuit opens again.
   assert hellhound.current_identity(client, second, bound(client))
     == quarantined
   assert support.token_requests(provider) == requests + 2
@@ -455,12 +466,84 @@ fn circuit(status: Int, code: String) -> Nil {
   support.provider_stop(provider)
 }
 
-pub fn a_503_quarantines_one_session_and_pauses_the_rest_test() {
-  circuit(503, "temporarily_unavailable")
+/// A 429 refuses the request before the grant is processed: no session is
+/// lost. The node pauses renewals, and every session renews once the
+/// provider answers again.
+pub fn a_429_keeps_every_session_and_pauses_renewals_test() {
+  let provider = support.provider_start(support.Standard)
+  claims(provider, [issued_ago(1000)])
+  let monotonic = support.clock_new(0)
+  let client =
+    start(settings(provider) |> support.with_monotonic_clock(monotonic))
+  let first = logged_in(provider, client)
+  let second = logged_in(provider, client)
+  claims(provider, [])
+  script_refreshes(provider, support.Status(429, "slow_down"))
+  let requests = support.token_requests(provider)
+  let limited = hellhound.RefreshRateLimited
+  assert hellhound.current_identity(client, first, bound(client))
+    == Error(limited)
+  assert hellhound.session_error_action(limited) == hellhound.RetryLater
+  assert support.token_requests(provider) == requests + 1
+  let paused = Error(hellhound.RefreshNotSent(hellhound.RenewalPaused))
+  assert hellhound.current_identity(client, first, bound(client)) == paused
+  assert hellhound.current_identity(client, second, bound(client)) == paused
+  assert support.token_requests(provider) == requests + 1
+  // The access token of the rate-limited session is still served.
+  let assert Ok(_) = hellhound.access_token(client, first)
+  // The provider answers again. After the window both sessions renew,
+  // the rate-limited one with the same refresh token.
+  script_refreshes(provider, support.Delay(0))
+  support.clock_set(monotonic, 60_000)
+  let assert Ok(_) = hellhound.current_identity(client, first, bound(client))
+  let assert Ok(_) = hellhound.current_identity(client, second, bound(client))
+  assert support.token_requests(provider) == requests + 3
+  hellhound.stop(client)
+  support.provider_stop(provider)
 }
 
-pub fn a_429_quarantines_one_session_and_pauses_the_rest_test() {
-  circuit(429, "slow_down")
+/// After the window one renewal is the probe. While it is in flight the
+/// others stay paused, so a provider that is still slow or failing is asked
+/// once per window and not by every session that reads. The probe's answer
+/// closes the circuit.
+pub fn one_probe_is_sent_after_the_window_test() {
+  let provider = support.provider_start(support.Standard)
+  claims(provider, [issued_ago(1000)])
+  let monotonic = support.clock_new(0)
+  let client =
+    start(settings(provider) |> support.with_monotonic_clock(monotonic))
+  let first = logged_in(provider, client)
+  script_refreshes(provider, support.Status(503, "temporarily_unavailable"))
+  let assert Error(hellhound.RefreshQuarantined(_)) =
+    hellhound.current_identity(client, first, bound(client))
+  // The provider answers again, slowly.
+  let rest = list.map([1, 2, 3, 4], fn(_) { logged_in(provider, client) })
+  claims(provider, [])
+  script_refreshes(provider, support.Delay(300))
+  support.clock_set(monotonic, 60_000)
+  let requests = support.token_requests(provider)
+  let results =
+    support.spawn_collect(
+      list.map(rest, fn(session) {
+        fn() {
+          hellhound.current_identity(client, session, bound(client))
+          |> result.replace(Nil)
+        }
+      }),
+      30_000,
+    )
+  let paused = Error(hellhound.RefreshNotSent(hellhound.RenewalPaused))
+  assert list.count(results, fn(result) { result == paused }) == 3
+  assert list.count(results, fn(result) { result == Ok(Nil) }) == 1
+  assert support.token_requests(provider) == requests + 1
+  // The probe was answered: the paused sessions now renew.
+  list.each(rest, fn(session) {
+    let assert Ok(_) =
+      hellhound.current_identity(client, session, bound(client))
+  })
+  assert support.token_requests(provider) == requests + 4
+  hellhound.stop(client)
+  support.provider_stop(provider)
 }
 
 /// A response rejected for one session says nothing about the provider: that
@@ -511,6 +594,63 @@ pub fn the_circuit_closes_after_its_window_test() {
 }
 
 // --- Telemetry ---------------------------------------------------------------------
+
+/// Every bounded read emits one event that names how it ended, including
+/// the reads that send nothing; a quarantined refresh names its reason.
+pub fn the_bounded_read_reports_how_it_ended_test() {
+  let provider = support.provider_start(support.Standard)
+  let client = start(settings(provider))
+  let within = logged_in(provider, client)
+  claims(provider, [issued_ago(1000)])
+  let stale = logged_in(provider, client)
+  let others = support.refresh_tokens(provider)
+  let failing = logged_in(provider, client)
+  let assert [failing_token] =
+    list.filter(support.refresh_tokens(provider), fn(token) {
+      !list.contains(others, token)
+    })
+  let waiting = logged_in(provider, client)
+  claims(provider, [])
+  support.script(
+    provider,
+    support.Refresh(failing_token),
+    support.Status(503, "temporarily_unavailable"),
+  )
+  let reads = process.new_subject()
+  let quarantines = process.new_subject()
+  let plan =
+    sinal.subscriptions([
+      sinal.subscription(telemetry.current_identity(), fn(_, read) {
+        process.send(reads, read.outcome)
+      }),
+      sinal.subscription(telemetry.refresh(), fn(_, refresh) {
+        process.send(quarantines, refresh.quarantine)
+      }),
+    ])
+  let assert Ok(_) =
+    sinal.with_subscriptions(plan, fn() {
+      let assert Ok(_) =
+        hellhound.current_identity(client, within, bound(client))
+      let assert Ok(_) =
+        hellhound.current_identity(client, stale, bound(client))
+      let assert Error(hellhound.RefreshQuarantined(_)) =
+        hellhound.current_identity(client, failing, bound(client))
+      let assert Error(hellhound.RefreshNotSent(hellhound.RenewalPaused)) =
+        hellhound.current_identity(client, waiting, bound(client))
+      Nil
+    })
+  assert process.receive(reads, 1000) == Ok(telemetry.ClaimsWithinBound)
+  assert process.receive(reads, 1000) == Ok(telemetry.ClaimsRenewed)
+  assert process.receive(reads, 1000) == Ok(telemetry.ClaimsReadFailed)
+  assert process.receive(reads, 1000) == Ok(telemetry.ClaimsRenewalPaused)
+  assert process.receive(reads, 0) == Error(Nil)
+  assert process.receive(quarantines, 1000) == Ok(telemetry.NotQuarantined)
+  assert process.receive(quarantines, 1000)
+    == Ok(telemetry.QuarantinedOutcomeUnknown)
+  assert process.receive(quarantines, 0) == Error(Nil)
+  hellhound.stop(client)
+  support.provider_stop(provider)
+}
 
 pub fn the_refresh_event_reports_whether_claims_were_replaced_test() {
   let provider = support.provider_start(support.Standard)

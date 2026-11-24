@@ -584,7 +584,8 @@ pub type ProviderFailure {
   /// A backend failure Hellhound does not classify further.
   UnclassifiedBackendFailure
   /// `current_identity` did not start a claims renewal: an earlier renewal on
-  /// this node ended in quarantine less than 60 s ago. Nothing was sent.
+  /// this node met a provider fault less than 60 s ago, or the one probe
+  /// after that window has not reported yet. Nothing was sent.
   RenewalPaused
 }
 
@@ -2053,6 +2054,9 @@ pub type SessionError {
   /// The token endpoint refused the refresh before processing the grant
   /// (RFC 6749 §5.2); the refresh token may be sent again later.
   RefreshRejected(OAuthError)
+  /// The token endpoint answered 429: it refused the refresh without
+  /// processing the grant, so the refresh token may be sent again later.
+  RefreshRateLimited
   /// The refresh request was proven not sent; it may be tried again.
   RefreshNotSent(ProviderFailure)
   /// The provider may have rotated the refresh token, so it is never sent
@@ -2074,8 +2078,9 @@ pub type SessionError {
 /// Why a refresh left the claims past the `current_identity` bound.
 pub type NotRenewedReason {
   /// The refresh response carried no ID token, so the claims are the ones
-  /// held before. Reauthenticate: call `logout`, then send the user to
-  /// sign in.
+  /// held before. The provider or the client registration does not return
+  /// an ID token on refresh (OIDC Core §12.2 makes it optional), which
+  /// signing in again does not change. An operator must act.
   NotReturned
   /// An ID token was just issued, and its `iat` is already past the bound:
   /// the provider's clock is behind by more than the bound, or the provider
@@ -2342,21 +2347,28 @@ pub fn current_issued_at(current: Current) -> Timestamp {
 ///
 /// | Action | Meaning | Errors |
 /// | --- | --- | --- |
-/// | `RetryLater` | Deny this request; keep the session. | not-sent failures, `RefreshNotSent(RenewalPaused)`, store and wait timeouts |
-/// | `Reauthenticate` | Call `logout`, then send the user to sign in. | `ClaimsNotRenewed(NotReturned)`, a quarantined or revoked refresh token, no refresh token, no live session |
-/// | `FixConfiguration` | An operator must act; keep the session. | `ClaimsNotRenewed(IssuedTooLongAgo)`, a stored session that did not open, a foreign session |
+/// | `RetryLater` | Deny this request; keep the session. | not-sent failures, `RefreshRateLimited`, `RefreshNotSent(RenewalPaused)`, store and wait timeouts |
+/// | `Reauthenticate` | Call `logout`, then send the user to sign in. | a quarantined or revoked refresh token, no refresh token, no live session |
+/// | `FixConfiguration` | An operator must act; keep the session. | `ClaimsNotRenewed`, a stored session that did not open, a foreign session |
 /// | `Recover` | Call `recover_refresh`, then `current_identity` again. | `RefreshUnconfirmed` |
 ///
-/// Calling `logout` on `Reauthenticate` ends the session, so a renewal that
-/// cannot succeed is not sent again on every request.
+/// Calling `logout` on `Reauthenticate` ends a session that cannot be used
+/// again. On `FixConfiguration` the session is kept: `ClaimsNotRenewed`
+/// would return after a new login too, so signing in again cures nothing.
 ///
-/// Renewal circuit: when a renewal this function dispatched ends with the
-/// provider's outcome unknown (it answered 5xx or 429, or timed out after
-/// the request was sent), or returns an ID token already past the bound
-/// (`IssuedTooLongAgo`), this node starts no renewal from `current_identity`
-/// for 60 s and returns `RefreshNotSent(RenewalPaused)`. A response rejected
-/// for one session does not open it. `access_token` and `refresh` are not
-/// affected.
+/// Renewal circuit: this node starts no renewal from `current_identity` for
+/// 60 s, and returns `RefreshNotSent(RenewalPaused)`, after a renewal this
+/// function dispatched ends in one of these ways:
+///
+/// - the provider's outcome is unknown (a 5xx, or a timeout after the
+///   request was sent), which also quarantines that session;
+/// - the provider answered 429, which keeps the session;
+/// - the refresh worked and `ClaimsNotRenewed` was returned.
+///
+/// After the window one renewal is sent as a probe, and the others stay
+/// paused until it reports: an answer closes the circuit, a fault opens it
+/// for another 60 s. A response rejected for one session does not open it.
+/// `access_token` and `refresh` do not consult the circuit.
 ///
 /// The bound limits the age of the last ID token the provider issued. A
 /// role removed at the provider is denied within the bound only if the
@@ -2369,56 +2381,121 @@ pub fn current_identity(
   session: Session,
   claims_age: ClaimsAge,
 ) -> Result(Current, SessionError) {
-  use _ <- result.try(same_provider(client, session))
-  use snapshot <- result.try(load(client, redacted.reveal(session.reference)))
-  use held <- result.try(session_of(client, snapshot))
-  case within_claims_age(client, held, claims_age) {
-    Ok(current) -> Ok(current)
-    Error(Nil) ->
-      case provider.renewal_admitted(client.backend.provider) {
-        False -> Error(RefreshNotSent(RenewalPaused))
-        True -> {
-          let renewal = renew(client, snapshot, False)
-          case renewal.result {
-            Error(RefreshQuarantined(ProviderOutcomeUnknown) as error) -> {
-              // Only an unknown provider outcome opens the circuit, and only
-              // from the renewal that met it: a response rejected for one
-              // session, a lost lease, or a session found already
-              // quarantined says nothing about the provider's health.
-              case renewal.dispatched {
-                True -> provider.pause_renewals(client.backend.provider)
-                False -> Nil
-              }
-              Error(error)
-            }
-            Error(error) -> Error(error)
-            Ok(access) ->
-              case within_claims_age(client, access.session, claims_age) {
-                Ok(current) -> Ok(current)
-                Error(Nil) -> {
-                  let reason = case
-                    redacted.reveal(access.session.identity.claims)
-                    == redacted.reveal(held.identity.claims)
-                  {
-                    // The same claims as before the refresh: no ID token
-                    // replaced them.
-                    True -> NotReturned
-                    False -> IssuedTooLongAgo
-                  }
-                  // A token issued already past the bound will be issued
-                  // that way again: pause, so the fault costs one refresh
-                  // per window and not one per request.
-                  case reason, renewal.dispatched {
-                    IssuedTooLongAgo, True ->
-                      provider.pause_renewals(client.backend.provider)
-                    _, _ -> Nil
-                  }
-                  Error(ClaimsNotRenewed(reason))
-                }
+  let started = secure.monotonic_ms()
+  let #(result, outcome) = read_current(client, session, claims_age)
+  sinal.emit(
+    telemetry.current_identity(),
+    telemetry.SessionMeasurements(duration_ms: secure.monotonic_ms() - started),
+    telemetry.CurrentIdentity(outcome:, correlation: client.correlation),
+  )
+  result
+}
+
+fn read_current(
+  client: Client,
+  session: Session,
+  claims_age: ClaimsAge,
+) -> #(Result(Current, SessionError), telemetry.ClaimsReadOutcome) {
+  let read = {
+    use _ <- result.try(same_provider(client, session))
+    use snapshot <- result.try(load(client, redacted.reveal(session.reference)))
+    use held <- result.map(session_of(client, snapshot))
+    #(snapshot, held)
+  }
+  case read {
+    Error(error) -> #(Error(error), telemetry.ClaimsReadFailed)
+    Ok(#(snapshot, held)) ->
+      case within_claims_age(client, held, claims_age) {
+        Ok(current) -> #(Ok(current), telemetry.ClaimsWithinBound)
+        Error(Nil) -> renew_claims(client, snapshot, held, claims_age)
+      }
+  }
+}
+
+/// Past the bound: one refresh, when the renewal circuit admits it, and its
+/// report to the circuit.
+fn renew_claims(
+  client: Client,
+  snapshot: custody.Snapshot,
+  held: Session,
+  claims_age: ClaimsAge,
+) -> #(Result(Current, SessionError), telemetry.ClaimsReadOutcome) {
+  let cache = client.backend.provider
+  // A probe that never reports is taken as lost once the read could no
+  // longer be running.
+  let lease_ms =
+    client.settings.refresh_wait_ms + client.settings.request_timeout_ms + 1000
+  case provider.admit_renewal(cache, lease_ms) {
+    provider.Paused -> #(
+      Error(RefreshNotSent(RenewalPaused)),
+      telemetry.ClaimsRenewalPaused,
+    )
+    admission -> {
+      let renewal = renew(client, snapshot, False)
+      let #(result, outcome) = case renewal.result {
+        Error(error) -> #(Error(error), telemetry.ClaimsReadFailed)
+        Ok(access) ->
+          case within_claims_age(client, access.session, claims_age) {
+            Ok(current) -> #(Ok(current), telemetry.ClaimsRenewed)
+            Error(Nil) ->
+              case replaced_claims(renewal, access.session, held) {
+                True -> #(
+                  Error(ClaimsNotRenewed(IssuedTooLongAgo)),
+                  telemetry.ClaimsIssuedTooLongAgo,
+                )
+                False -> #(
+                  Error(ClaimsNotRenewed(NotReturned)),
+                  telemetry.ClaimsNotReturned,
+                )
               }
           }
-        }
       }
+      provider.renewal_reported(cache, admission, verdict(renewal, result))
+      #(result, outcome)
+    }
+  }
+}
+
+/// Whether the refresh replaced the claims that `held` shows. The attempt
+/// that called the provider knows whether it published an ID token, so a
+/// token reissued with identical claims still counts as replaced. One that
+/// used another request's refresh can only compare.
+fn replaced_claims(renewal: Renewal, now: Session, held: Session) -> Bool {
+  case renewal.dispatched {
+    True -> renewal.claims == telemetry.Replaced
+    False ->
+      redacted.reveal(now.identity.claims)
+      != redacted.reveal(held.identity.claims)
+  }
+}
+
+/// What a claims renewal learned about the provider, for the renewal
+/// circuit. Only the attempt that called the provider learned anything: a
+/// session found already quarantined, or a refresh that was joined, says
+/// nothing new.
+fn verdict(
+  renewal: Renewal,
+  result: Result(Current, SessionError),
+) -> provider.Verdict {
+  case renewal.dispatched, result {
+    False, _ -> provider.NothingLearned
+    // The outcome is unknown, or the provider asked this node to slow down.
+    True, Error(RefreshQuarantined(ProviderOutcomeUnknown))
+    | True, Error(RefreshRateLimited)
+    -> provider.Faulted
+    // The refresh worked and can never satisfy the bound: the next one
+    // would end the same way, so it costs one refresh per window and not
+    // one per request.
+    True, Error(ClaimsNotRenewed(_)) -> provider.Faulted
+    // The provider was not reached, or this node could not record what it
+    // said.
+    True, Error(RefreshNotSent(_))
+    | True, Error(SessionStoreUnavailable)
+    | True, Error(RefreshQuarantined(RefresherLost))
+    -> provider.NothingLearned
+    // The provider answered: tokens, a refusal, or a response rejected for
+    // this one session.
+    True, _ -> provider.Answered
   }
 }
 
@@ -2489,6 +2566,15 @@ fn renew(client: Client, snapshot: custody.Snapshot, usable: Bool) -> Renewal {
         telemetry.Refresh(
           outcome:,
           claims: renewal.claims,
+          quarantine: case renewal.result {
+            Error(RefreshQuarantined(ProviderOutcomeUnknown)) ->
+              telemetry.QuarantinedOutcomeUnknown
+            Error(RefreshQuarantined(ResponseRejected(_))) ->
+              telemetry.QuarantinedResponseRejected
+            Error(RefreshQuarantined(RefresherLost)) ->
+              telemetry.QuarantinedRefresherLost
+            _ -> telemetry.NotQuarantined
+          },
           correlation: client.correlation,
         ),
       )
@@ -2625,6 +2711,14 @@ fn dispatch_refresh(client: Client, dispatch: custody.Dispatch) -> Renewal {
             custody.SettleNotSent,
             RefreshNotSent(provider_failure(failure)),
             telemetry.RefreshNotSent,
+          )
+        // A rate limiter refuses the request before the grant is processed,
+        // so the refresh token was not consumed: release the generation.
+        protocol.Endpoint(status: 429, ..) ->
+          settle(
+            custody.SettleNotSent,
+            RefreshRateLimited,
+            telemetry.RefreshRateLimited,
           )
         protocol.Endpoint(status:, error:) if status == 400 || status == 401 ->
           case oauth_error(error) {
@@ -2877,12 +2971,14 @@ pub fn session_error_action(error: SessionError) -> Action {
     RefreshRejected(InvalidClient) | RefreshRejected(UnauthorizedClient) ->
       FixConfiguration
     RefreshRejected(UnsupportedGrantType) -> FixConfiguration
-    RefreshRejected(_) -> RetryLater
+    RefreshRejected(_) | RefreshRateLimited -> RetryLater
     SessionStoreUnavailable | RefreshWaitTimedOut -> RetryLater
     RefreshNotSent(_) -> RetryLater
     RefreshUnconfirmed(_) -> Recover
-    ClaimsNotRenewed(NotReturned) -> Reauthenticate
-    ClaimsNotRenewed(IssuedTooLongAgo) -> FixConfiguration
+    // Neither is cured by signing in again: the next refresh would end the
+    // same way.
+    ClaimsNotRenewed(NotReturned) | ClaimsNotRenewed(IssuedTooLongAgo) ->
+      FixConfiguration
   }
 }
 
@@ -2903,6 +2999,8 @@ pub fn describe_session_error(error: SessionError) -> String {
       "the refresh was not sent: " <> describe_provider_failure(failure)
     RefreshQuarantined(reason) ->
       "the refresh token is quarantined: " <> quarantine_name(reason)
+    RefreshRateLimited ->
+      "the token endpoint answered 429; the refresh may be tried again later"
     RefreshWaitTimedOut ->
       "another request's refresh did not settle in time (with_refresh_wait)"
     RefreshUnconfirmed(_) ->

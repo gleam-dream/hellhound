@@ -191,18 +191,21 @@ pub fn refresh_answers_are_scripted_test() {
   let assert Ok(access) = hellhound.refresh(client, session)
   assert role_names(hellhound.session_identity(access.session)) == ["operator"]
 
-  // 503 and 429 are counted as rejected and leave the grant active.
+  // 503 and 429 are counted as rejected and leave the grant active. A 503
+  // leaves the outcome unknown; a 429 keeps the session, which refreshes
+  // again once the provider answers.
   testing.set_refresh_answer(provider, testing.RefreshUnavailable)
-  let quarantined =
-    Error(hellhound.RefreshQuarantined(hellhound.ProviderOutcomeUnknown))
-  assert hellhound.refresh(client, access.session) == quarantined
+  assert hellhound.refresh(client, access.session)
+    == Error(hellhound.RefreshQuarantined(hellhound.ProviderOutcomeUnknown))
   let other = login(provider, client)
   testing.set_refresh_answer(provider, testing.RefreshRateLimited)
-  assert hellhound.refresh(client, other) == quarantined
+  assert hellhound.refresh(client, other) == Error(hellhound.RefreshRateLimited)
   let counts = testing.requests(provider)
   assert counts.rejected_refresh_grants == 2
   assert counts.refresh_grants == 2
   assert counts.active_refresh_tokens == 2
+  testing.set_refresh_answer(provider, testing.RefreshWithoutIdToken)
+  let assert Ok(_) = hellhound.refresh(client, other)
   hellhound.stop(client)
   testing.stop_provider(provider)
 }

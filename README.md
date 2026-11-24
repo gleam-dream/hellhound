@@ -207,7 +207,7 @@ pub type Decision {
   TryAgainLater
   /// The session was ended: send the person to sign in.
   SignInAgain
-  /// An operator must act: deny, and alert.
+  /// An operator must act: deny, keep the session, and alert.
   Misconfigured
 }
 
@@ -254,8 +254,8 @@ fn denied(
       TryAgainLater
     }
     hellhound.Recover, _ | hellhound.RetryLater, _ -> TryAgainLater
-    // End the session before redirecting, so a renewal that cannot succeed
-    // is not sent again on every request.
+    // The session cannot be used again (its refresh token is revoked or
+    // quarantined, or it is gone): end it before redirecting.
     hellhound.Reauthenticate, _ -> {
       let _ = hellhound.logout(client, session, hellhound.default_logout())
       SignInAgain
@@ -345,7 +345,8 @@ configuration alone supplies no introspection credentials.
   owns migrations, pool lifetime, capacity and backup policy.
 - Decide permissions from `hellhound.current_identity`, never from
   `session_identity`. On `Reauthenticate` from it, call `logout` before
-  redirecting. A long-lived connection checks on each incoming message and
+  redirecting. On `FixConfiguration` deny the request, keep the session and
+  alert an operator. A long-lived connection checks on each incoming message and
   closes on a timer when the claims pass the bound, without polling while idle.
 - Do not blindly resend a possibly consumed authorization code or refresh token.
   Branch on `login_error_action` or `session_error_action`; keep errors carrying

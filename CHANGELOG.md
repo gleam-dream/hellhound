@@ -35,13 +35,18 @@ format is unchanged: 0.2.x and 0.3.0 read the same records, in both directions.
   checked bound, built from the client it is used with. It refuses less than
   60 s, and a bound not greater than that client's clock tolerance. There is no
   default and no configuration key.
-- A renewal circuit. After a renewal started by `current_identity` ends with
-  the provider's outcome unknown (a 5xx, a 429, or a timeout after the request
-  was sent), or returns an ID token already past the bound, that node starts no
-  renewal from `current_identity` for 60 s and returns
-  `RefreshNotSent(RenewalPaused)`. A response rejected for one session does not
-  open it. `access_token` and `refresh` are not affected, and no rotation or
-  quarantine rule changed.
+- A renewal circuit. That node starts no renewal from `current_identity` for
+  60 s, and returns `RefreshNotSent(RenewalPaused)`, after a renewal started by
+  `current_identity` ends with the provider's outcome unknown (a 5xx, or a
+  timeout after the request was sent), with a 429, or with `ClaimsNotRenewed`.
+  After the window one renewal is sent as a probe and the others stay paused
+  until it reports. A response rejected for one session does not open the
+  circuit. `access_token` and `refresh` do not consult it.
+- `telemetry.current_identity()`, the event `[hellhound, current_identity]`.
+  It is emitted once for every bounded read, including the reads that send
+  nothing, with `outcome`: `within_bound`, `renewed`, `paused`, `not_returned`,
+  `issued_too_long_ago` or `failed`. Alert on `not_returned` and
+  `issued_too_long_ago`; count `paused` to see the circuit.
 - `hellhound/testing`: `RefreshAnswer`, `with_refresh_answer` and
   `set_refresh_answer` script the refresh grant: with or without an ID token,
   or a 503 or 429 that leaves the grant untouched. The default is unchanged
@@ -50,8 +55,16 @@ format is unchanged: 0.2.x and 0.3.0 read the same records, in both directions.
 ### Breaking
 
 - `SessionError` gains `ClaimsNotRenewed(NotRenewedReason)`, with
-  `NotReturned` (Reauthenticate) and `IssuedTooLongAgo` (FixConfiguration).
-  Only `current_identity` returns it.
+  `NotReturned` and `IssuedTooLongAgo`, both FixConfiguration: a new login
+  would end the same way, so the session is kept. Only `current_identity`
+  returns it.
+- **A 429 from the token endpoint no longer quarantines the session.** A rate
+  limiter refuses the request before the grant is processed, so the refresh
+  token is kept and may be sent again. `SessionError` gains
+  `RefreshRateLimited` (RetryLater), returned by `access_token`, `refresh` and
+  `current_identity`; in 0.2.x the same answer was
+  `RefreshQuarantined(ProviderOutcomeUnknown)` (Reauthenticate). A 5xx and a
+  timeout after the request was sent still quarantine.
 - `session_error_action(SessionRecordUnreadable)` is `FixConfiguration`; it
   was `Reauthenticate`. A stored session that does not open is most often an
   unknown sealing key, which affects every session at once, and `logout` on
@@ -62,6 +75,11 @@ format is unchanged: 0.2.x and 0.3.0 read the same records, in both directions.
 - `telemetry.Refresh` gains the field `claims: RefreshClaims`, `Replaced` or
   `NotReturned`, and the `[hellhound, refresh]` metadata gains `claims`
   (`<<"replaced">>` or `<<"not_returned">>`).
+- `telemetry.Refresh` gains the field `quarantine: RefreshQuarantine`, and the
+  metadata gains `quarantine`: `<<"none">>`, `<<"outcome_unknown">>`,
+  `<<"response_rejected">>` or `<<"refresher_lost">>`. It tells one session's
+  rejected response from a provider that stopped answering.
+- `telemetry.RefreshOutcome` gains `RefreshRateLimited` (`<<"rate_limited">>`).
 - The behaviour changes under "Changed" above.
 
 ### Migrating from 0.2.x
@@ -77,14 +95,18 @@ format is unchanged: 0.2.x and 0.3.0 read the same records, in both directions.
 3. **Permission checks.** Move every decision drawn from claims (roles, groups,
    tenant) from `session_identity` to `current_identity`, with a bound you
    choose, and make your authorization helpers take `Current`. Then:
-   - on `Reauthenticate`, call `logout` before redirecting to sign-in;
+   - on `Reauthenticate`, call `logout` before redirecting to sign-in. Do not
+     treat `FixConfiguration` the same way: it keeps the session;
    - on `RetryLater`, deny the request and keep the session;
    - on `Recover`, call `recover_refresh`, then `current_identity` again;
    - on `FixConfiguration`, deny the request, keep the session and alert an
      operator.
 4. **Provider and deployment.** The bound limits the age of the last ID token.
    A removed role is denied within it only if your provider evaluates claims
-   again on refresh and returns an ID token, so verify both. Request a refresh
+   again on refresh and returns an ID token, so verify both. A provider that
+   returns no ID token on refresh denies every permission check once the
+   claims pass the bound (`ClaimsNotRenewed(NotReturned)`), until an operator
+   fixes it. Request a refresh
    token, and keep node clocks within the clock tolerance
    (`config.with_clock_tolerance`, default 5 s). Past the bound each permission
    check costs one refresh per session, so size that load against your
