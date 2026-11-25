@@ -8,11 +8,11 @@ gleam_stdlib = ">= 0.70.0 and < 2.0.0"
 gleam_erlang = ">= 1.0.0 and < 2.0.0"
 gleam_time = ">= 1.11.0 and < 2.0.0"
 hellhound = { path = ".." }
-# Floor for the transitive Relay dependency: from json_blueprint 2.2.0 a
-# codec copies between processes at about its own size.
-json_blueprint = ">= 2.2.0 and < 3.0.0"
-# Relay 0.2.2 holds the server once instead of copying it per request.
-relay = ">= 0.2.2 and < 0.3.0"
+# Unreleased integration heads; Relay's head pins these same json_blueprint,
+# http_gun and sinal commits, so each package has one source.
+json_blueprint = { git = "https://github.com/gleam-dream/json_blueprint.git", ref = "3adcf515bcc91beb8b40f025c5dc81c4f863b1cf" }
+relay = { git = "https://github.com/gleam-dream/relay.git", ref = "ebbd26259584d5cfeafbf1e7f5859c72bd7c649a" }
+http_gun = { git = "https://github.com/gleam-dream/http_gun.git", ref = "0d6558c9ede95fab9a6bbf287ecd363e05b0fbcb" }
 sinal = { git = "https://github.com/gleam-dream/sinal.git", ref = "29ea7a90bf820b3c91eb3f76e824abe0d034d78f" }
 
 [dev-dependencies]
