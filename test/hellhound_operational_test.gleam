@@ -139,6 +139,25 @@ pub fn a_started_client_cannot_start_twice_test() {
   support.provider_stop(provider)
 }
 
+/// A shutdown hook or request process, not the process that started the
+/// client, is the usual caller of `stop`.
+pub fn another_process_can_stop_a_started_client_test() {
+  let provider = support.provider_start(support.Standard)
+  use <- exception.defer(fn() { support.provider_stop(provider) })
+  let client = start(settings(provider))
+  let done = process.new_subject()
+  process.spawn_unlinked(fn() {
+    hellhound.stop(client)
+    process.send(done, Nil)
+  })
+  let assert Ok(Nil) = process.receive(done, 10_000)
+  // The tree is gone, so the same value starts again; the starting process
+  // survived the stop because it is running this assertion.
+  let assert Ok(Nil) = hellhound.start(client)
+  let _ = logged_in(provider, client)
+  hellhound.stop(client)
+}
+
 /// A service client needs no redirect URI and no authorization-code
 /// support; login is not configured.
 pub fn service_client_starts_without_login_test() {
