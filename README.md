@@ -188,11 +188,15 @@ The server stores nothing between `begin_login` and the callback. The pending
 login (state, nonce, PKCE verifier, redirect URI, issuer, client id and expiry)
 is sealed with AES-256-GCM into a cookie that `login_response` sets:
 
-- The cookie name is `__Secure-hellhound_login_` plus a digest of the state, so
+- The cookie name is `__Host-hellhound_login_` plus a digest of the state, so
   logins started in several tabs keep separate cookies and each completes.
-- The cookie is `Secure`, `HttpOnly`, `SameSite=Lax` (`None` with form-post
-  callbacks), scoped to the path of the redirect URI and kept for the login
-  lifetime (10 minutes by default).
+- The `__Host-` prefix makes the cookie `Secure`, `Path=/` and host-only (no
+  `Domain`), so a sibling subdomain cannot plant a pending login of its own. A
+  cookie under any other name is ignored.
+- The cookie is also `HttpOnly`, `SameSite=Lax` (`None` with form-post
+  callbacks) and kept for the login lifetime (10 minutes by default). With
+  `Path=/` the browser sends each pending login's cookie on every request to
+  the host until the callback or `Max-Age` ends it.
 - `complete_login` refuses a callback whose cookie is missing
   (`LoginCookieMissing`), altered or sealed under another key or state
   (`LoginCookieInvalid`), sealed by a client with another issuer or client id
