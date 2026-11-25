@@ -215,7 +215,9 @@ test("expired login is rejected", async ({ context }) => {
   await keycloakLogin(page);
   await page.waitForLoadState("load");
   const body = await page.textContent("body");
-  assert.ok(body.includes("the login expired"), body);
+  // The login cookie's Max-Age equals the login lifetime, so the browser
+  // has already dropped it: the callback carries no login cookie.
+  assert.ok(body.includes("no login cookie for this state"), body);
   return null;
 });
 
