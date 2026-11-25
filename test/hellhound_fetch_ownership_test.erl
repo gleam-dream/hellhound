@@ -19,6 +19,8 @@ stale_completion_cannot_restore_removed_key_test() ->
             stop(Cache, kill),
             Replacement = next_worker(),
             complete(Parent, Replacement),
+            %% A read no longer queues behind the completion in the cache's mailbox.
+            await_ready(Handle, erlang:monotonic_time(millisecond) + 5000),
             ?assertEqual({error, unknown_signing_key}, hellhound@resource:verify(Validator, Token)),
             Worker ! release,
             down(Worker, 1000),
@@ -84,6 +86,42 @@ cached_reads_and_independent_client_progress_test() ->
                 Worker ! release,
                 ?assertMatch({ok, _}, result(Caller))
             end)
+        end)
+    end).
+
+%% Validation reads the accepted snapshot itself. A cache process that is
+%% not taking messages (suspended here; busy, collecting garbage or behind a
+%% long mailbox in production) cannot delay it.
+validation_does_not_wait_for_a_busy_cache_test() ->
+    with_client(fun(Test, Client, Parent, Handle) ->
+        Validator = hellhound@resource:new(Client, <<"https://api.test">>),
+        Token = token(Test),
+        Cache = cache(Parent),
+        true = erlang:suspend_process(Cache),
+        try
+            ?assertMatch({ok, _}, hellhound@resource:verify(Validator, Token)),
+            ?assertMatch({ok, _}, hellhound@internal@native@provider:snapshot_of(Handle))
+        after erlang:resume_process(Cache) end
+    end).
+
+%% The snapshot a cache incarnation published is no authority once that
+%% incarnation is gone: a replacement that has not discovered yet is not ready.
+published_snapshot_ends_with_its_cache_incarnation_test() ->
+    with_client(fun(Test, Client, Parent, Handle) ->
+        Validator = hellhound@resource:new(Client, <<"https://api.test">>),
+        Token = token(Test),
+        ?assertMatch({ok, _}, hellhound@resource:verify(Validator, Token)),
+        with_barrier(fun(Id) ->
+            stop(cache(Parent), kill),
+            %% The replacement's discovery is held after its HTTP response.
+            Replacement = blocked(),
+            ?assertEqual({error, not_ready}, hellhound@internal@native@provider:snapshot_of(Handle)),
+            ?assertMatch({error, {keys_unavailable, _}}, hellhound@resource:verify(Validator, Token)),
+            Replacement ! release,
+            down(Replacement, 5000),
+            telemetry:detach(Id),
+            await_ready(Handle, erlang:monotonic_time(millisecond) + 5000),
+            ?assertMatch({ok, _}, hellhound@resource:verify(Validator, Token))
         end)
     end).
 
@@ -224,7 +262,28 @@ stop(Pid, Reason) ->
 %% Fixed local microbenchmark, deliberately outside the correctness gate.
 benchmark() ->
     lists:foreach(fun(N) -> bench_clients(N, [], fun bench/1) end, [1, 4]),
+    bench_clients(1, [], fun(Clients) -> bench_callers(Clients, 4) end),
     bookkeeping().
+%% One client validated by several caller processes at once: every caller
+%% reads the same provider cache.
+bench_callers([{V, T, _, _}], Callers) ->
+    [hellhound@resource:verify(V, T) || _ <- lists:seq(1, 100)],
+    Parent = self(),
+    Start = erlang:monotonic_time(microsecond),
+    [spawn(fun() ->
+        Times = [begin S = erlang:monotonic_time(microsecond),
+                       {ok, _} = hellhound@resource:verify(V, T),
+                       erlang:monotonic_time(microsecond) - S end || _ <- lists:seq(1, 3000)],
+        Parent ! {sample, Times}
+    end) || _ <- lists:seq(1, Callers)],
+    Samples = lists:append([receive {sample, S} -> S after 30000 -> error(bench_timeout) end
+                            || _ <- lists:seq(1, Callers)]),
+    Elapsed = erlang:monotonic_time(microsecond) - Start,
+    Sorted = lists:sort(Samples),
+    io:format("one_client_callers=~p validations=~p total_us=~p throughput_per_s=~p p50_us=~p p95_us=~p p99_us=~p~n",
+        [Callers, length(Samples), Elapsed, length(Samples) * 1000000 div Elapsed,
+         lists:nth(length(Sorted) div 2, Sorted), lists:nth(length(Sorted) * 95 div 100, Sorted),
+         lists:nth(length(Sorted) * 99 div 100, Sorted)]).
 bench_clients(0, Acc, Fun) -> Fun(Acc);
 bench_clients(N, Acc, Fun) ->
     with_client(fun(Test, Client, Parent, Handle) ->

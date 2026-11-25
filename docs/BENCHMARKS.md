@@ -43,6 +43,34 @@ sets of paired samples. Heap allocation bins varied; the observations do not
 establish a memory improvement. Idle and completed-burst caches had no active
 lifecycle monitors or queued messages.
 
+## Snapshot reads without the cache process (2026-11-24)
+
+Before this change every validation asked the cache process for its snapshot
+through a spawned proxy process. The cache now publishes the accepted snapshot
+as a persistent term and the caller reads it directly.
+
+Both sides were measured back to back with `scripts/benchmark` on one Apple M4
+laptop (10 cores, 16 GB, macOS 27.0), OTP 29 with four schedulers, Gleam 1.19.2.
+The baseline is revision `13c65db`. Other builds ran on the machine at the same
+time, so the figures are noisy; one run in three of the changed code was about
+20% slower in the concurrent rows, and the ranges show it. "After" is six
+runs. "Before" is six runs for the four-caller and snapshot rows and three for
+the other two, whose first three outputs were not kept.
+
+| Workload                                     |                 Before |                  After |
+| -------------------------------------------- | ---------------------: | ---------------------: |
+| One client, one caller, validations/s        | 13,452 (11,834–13,615) | 14,525 (14,256–14,751) |
+| One client, four callers, validations/s      | 40,851 (37,265–41,596) | 50,642 (38,916–51,309) |
+| Four clients, one caller each, validations/s | 45,471 (45,183–45,554) | 49,287 (39,110–50,128) |
+| One cache, sequential snapshot read          |    3.65 µs (3.59–3.70) | 0.060 µs (0.055–0.064) |
+
+Each cell is the median and the range. Median latency of one validation with one
+caller went from 74 µs to 69 µs: signature verification dominates, and the
+snapshot read was about 5% of it. With four callers of one client the 95th
+percentile went from 153–167 µs to 92–95 µs in the undisturbed runs (162 and
+201 µs in the two disturbed ones). The 2026-10-05 table above was recorded on
+other hardware and OTP 28 and is not comparable with these rows.
+
 ## Large signing-key sets
 
 A separate [five-pair forwarding measurement](https://github.com/gleam-dream/hellhound/blob/f3847d102c0db9f66e4d4a72a9c7b3028507c7ac/docs/PROGRESS.md#large-key-set-forwarding-measurement)
@@ -88,7 +116,8 @@ hellhound_fetch_ownership_test:snapshot_benchmark().
 
 The [retained source](../test/hellhound_fetch_ownership_test.erl) creates its own
 local HTTPS test provider and stops each client fixture. `benchmark/0` warms
-100 validations per client, measures 3,000 per client for one and four clients,
+100 validations per client, measures 3,000 per client for one and four clients
+and 3,000 per caller for four concurrent callers of one client,
 reports throughput and latency percentiles, and measures 100 sequential key
 refresh requests. The untimed `bookkeeping/0` setup makes the one key fetch
 before timing starts; under the unknown-key cooldown, the 100 timed requests
