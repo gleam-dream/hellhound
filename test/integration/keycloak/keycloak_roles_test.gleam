@@ -13,6 +13,7 @@ import exception
 import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/http/request
+import gleam/list
 import gleam/option.{Some}
 import gleam/time/duration
 import gleam/time/timestamp
@@ -63,6 +64,43 @@ fn roles(identity: hellhound.VerifiedIdentity) -> List(String) {
   |> option.unwrap([])
 }
 
+/// What Hellhound reported while one bounded read ran.
+type Event {
+  Read(telemetry.ClaimsReadOutcome)
+  Refreshed(telemetry.RefreshOutcome, telemetry.RefreshClaims)
+}
+
+/// One bounded read, with the events it emitted, in order. They say whether
+/// the read renewed, which is the behaviour under test.
+fn read(
+  client: hellhound.Client,
+  session: hellhound.Session,
+  age: hellhound.ClaimsAge,
+) -> #(Result(hellhound.Current, hellhound.SessionError), List(Event)) {
+  let events = process.new_subject()
+  let plan =
+    sinal.subscriptions([
+      sinal.subscription(telemetry.current_identity(), fn(_, read) {
+        process.send(events, Read(read.outcome))
+      }),
+      sinal.subscription(telemetry.refresh(), fn(_, refresh) {
+        process.send(events, Refreshed(refresh.outcome, refresh.claims))
+      }),
+    ])
+  let assert Ok(sinal.SubscriptionCompletion(work_result: result, ..)) =
+    sinal.with_subscriptions(plan, fn() {
+      hellhound.current_identity(client, session, age)
+    })
+  #(result, drain(events, []))
+}
+
+fn drain(events: process.Subject(Event), seen: List(Event)) -> List(Event) {
+  case process.receive(events, 0) {
+    Ok(event) -> drain(events, [event, ..seen])
+    Error(Nil) -> list.reverse(seen)
+  }
+}
+
 pub fn a_removed_realm_role_is_gone_after_the_claims_renew_test() {
   support.keycloak_realm_role("carol", "approver", support.Grant)
   let clock = support.clock_new(support.now_seconds())
@@ -80,11 +118,11 @@ pub fn a_removed_realm_role_is_gone_after_the_claims_renew_test() {
   assert roles(login) == ["approver"]
   assert hellhound.acr(login) == Some("1")
 
-  // Within the bound the read calls nobody and shows the role.
-  support.count_reset()
-  let assert Ok(current) = hellhound.current_identity(client, session, age)
+  // Within the bound the read shows the role without renewing.
+  let #(current, events) = read(client, session, age)
+  let assert Ok(current) = current
   assert roles(hellhound.current_claims(current)) == ["approver"]
-  assert support.count("/protocol/openid-connect/token") == 0
+  assert events == [Read(telemetry.ClaimsWithinBound)]
   let #(issued_at, _) =
     hellhound.current_issued_at(current)
     |> timestamp.to_unix_seconds_and_nanoseconds
@@ -96,22 +134,15 @@ pub fn a_removed_realm_role_is_gone_after_the_claims_renew_test() {
   process.sleep(2000)
   support.clock_set(clock, issued_at + 61)
 
-  let events = process.new_subject()
-  let plan =
-    sinal.subscriptions([
-      sinal.subscription(telemetry.refresh(), fn(_, refresh) {
-        process.send(events, #(refresh.outcome, refresh.claims))
-      }),
-    ])
-  let assert Ok(sinal.SubscriptionCompletion(work_result: renewed, ..)) =
-    sinal.with_subscriptions(plan, fn() {
-      hellhound.current_identity(client, session, age)
-    })
-  // One refresh; Keycloak returned an ID token evaluated after the removal.
+  // The read renews once; Keycloak returned an ID token evaluated after the
+  // removal.
+  let #(renewed, events) = read(client, session, age)
   let assert Ok(renewed) = renewed
-  assert support.count("/protocol/openid-connect/token") == 1
-  assert process.receive(events, 1000)
-    == Ok(#(telemetry.Refreshed, telemetry.Replaced))
+  assert events
+    == [
+      Refreshed(telemetry.Refreshed, telemetry.Replaced),
+      Read(telemetry.ClaimsRenewed),
+    ]
   let claims = hellhound.current_claims(renewed)
   assert roles(claims) == []
   let #(renewed_at, _) =
