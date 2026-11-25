@@ -64,7 +64,6 @@ pub fn defaults_match_the_release_table_test() {
   assert c.store_timeout_ms == 5000
   assert c.login_timeout_ms == 30_000
   assert c.login_lifetime_seconds == 600
-  assert c.max_pending_logins == 100_000
   assert c.session_absolute_seconds == 43_200
   assert c.session_idle_seconds == 3600
   assert c.clock_tolerance_seconds == 5
@@ -74,7 +73,6 @@ pub fn defaults_match_the_release_table_test() {
   assert c.destinations == settings.PublicOnly
   assert c.trust == settings.SystemTrust
   assert c.custody_store == None
-  assert c.transaction_store == None
   assert !c.assume_s256
   assert config.validate(c) == Ok(Nil)
 }
@@ -128,11 +126,6 @@ pub fn limits_name_their_setter_test() {
       base() |> config.with_refresh_wait(duration.minutes(2)),
       config.RefreshWait,
       "with_refresh_wait",
-    ),
-    #(
-      base() |> config.with_max_pending_logins(0),
-      config.MaxPendingLogins,
-      "with_max_pending_logins",
     ),
     #(
       base() |> config.with_max_response_bytes(10),
@@ -256,8 +249,6 @@ pub fn service_client_needs_credentials_and_no_redirect_test() {
 pub fn durable_stores_need_a_sealing_key_test() {
   let store = testing.memory_store()
   assert errors(config.with_custody_store(base(), store))
-    == [config.SealingKeyRequired]
-  assert errors(config.with_transaction_store(base(), store))
     == [config.SealingKeyRequired]
   let assert Ok(key) = config.sealing_key(<<0:256>>)
   assert errors(
@@ -449,4 +440,14 @@ pub fn session_lifetime_validation_test() {
   assert lifetime(600, 60) == []
   assert lifetime(60, 600) == [config.InvalidLimit(config.SessionLifetime)]
   assert lifetime(600, 0) == [config.InvalidLimit(config.SessionLifetime)]
+}
+
+/// The login cookie seals the issuer, client id and redirect URI; a
+/// configuration whose login cookie could exceed 4 KiB is refused.
+pub fn login_cookie_must_fit_a_browser_cookie_test() {
+  let long = "https://app.example/" <> string.repeat("a", 2100)
+  assert errors(config.with_allowed_redirect_uris(base(), [long]))
+    == [config.LoginCookieTooLarge]
+  let fits = "https://app.example/" <> string.repeat("a", 1900)
+  assert errors(config.with_allowed_redirect_uris(base(), [fits])) == []
 }

@@ -14,7 +14,7 @@ import gleam/time/timestamp
 import hellhound
 import hellhound/config
 import hellhound_login_test.{
-  authorize, browser, logged_in, param, settings, start, with_clock,
+  authorize, logged_in, param, settings, start, with_clock,
 }
 import hellhound_store_support as faults
 import hellhound_test_support as support
@@ -617,7 +617,7 @@ pub fn scope_omitted_at_code_exchange_is_the_requested_scope_test() {
   let client =
     start(settings(provider) |> config.with_scopes(["profile", "email"]))
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let code = "code-" <> param(hellhound.login_url(redirect), "state")
   let request = authorize(provider, redirect, code)
   support.script(provider, support.Code(code), support.OmitScope)
@@ -639,7 +639,6 @@ pub fn scope_omitted_at_code_exchange_reads_as_requested_test() {
   let assert Ok(redirect) =
     hellhound.begin_login(
       client,
-      browser(),
       hellhound.LoginOptions(..hellhound.default_login(), scopes: ["offline"]),
     )
   let code = "code-" <> param(hellhound.login_url(redirect), "state")
@@ -773,7 +772,6 @@ pub fn a_closed_connection_reports_receive_failed_test() {
         reason: hellhound.ReceiveFailed,
       )),
     )
-  let _ = browser
   let _ = None
   hellhound.stop(client)
   support.provider_stop(provider)

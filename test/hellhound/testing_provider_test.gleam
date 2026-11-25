@@ -4,7 +4,6 @@
 import gleam/bit_array
 import gleam/dynamic/decode
 import gleam/erlang/process
-import gleam/http/request
 import gleam/json
 import gleam/list
 import gleam/option
@@ -30,7 +29,7 @@ fn login(
   client: hellhound.Client,
 ) -> hellhound.Session {
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let assert Ok(callback) =
     testing.authorize(provider, redirect, subject: "ada")
   let assert Ok(session) = hellhound.complete_login(client, callback)
@@ -84,7 +83,7 @@ pub fn revocation_and_clock_skew_controls_test() {
   assert testing.requests(provider).rejected_refresh_grants == 1
   testing.set_clock_skew(provider, duration.seconds(20))
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let assert Ok(callback) =
     testing.authorize(provider, redirect, subject: "ada")
   assert hellhound.complete_login(client, callback)

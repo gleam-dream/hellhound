@@ -64,12 +64,12 @@ test("query login shows verified identity and custom claim", async ({
   assert.ok(department === "platform", `department ${department}`);
   assert.ok(issuer === ISSUER, `issuer ${issuer}`);
   const cookies = await context.cookies();
-  const binding = cookies.find((c) => c.name === "__Host-hellhound_binding");
-  const session = cookies.find((c) => c.name === "__Host-hellhound_session");
-  assert.ok(
-    binding?.httpOnly && binding?.secure && binding?.sameSite === "Lax",
-    `binding cookie ${JSON.stringify(binding)}`,
+  const pending = cookies.filter((c) =>
+    c.name.startsWith("__Host-hellhound_login_"),
   );
+  const session = cookies.find((c) => c.name === "__Host-hellhound_session");
+  // The callback response expired the login cookie.
+  assert.ok(pending.length === 0, `login cookies ${JSON.stringify(pending)}`);
   assert.ok(
     session?.httpOnly && session?.secure,
     `session cookie ${JSON.stringify(session)}`,
@@ -83,8 +83,8 @@ test("replayed callback is rejected", async ({ context }) => {
   const response = await page.goto(callback.url);
   const body = await page.textContent("body");
   assert.ok(
-    response.status() === 401 &&
-      body.includes("the login was already completed"),
+    response.status() === 400 &&
+      body.includes("no login cookie for this state"),
     `status ${response.status()} ${body}`,
   );
   return { status: response.status() };
@@ -130,7 +130,7 @@ test("simultaneous tabs complete independently", async ({ context }) => {
   return { emailA, emailB };
 });
 
-test("provider denial is reported and consumes the login", async ({
+test("provider denial is reported and clears the login cookie", async ({
   context,
 }) => {
   const page = await context.newPage();
@@ -155,21 +155,21 @@ test("provider denial is reported and consumes the login", async ({
     firstBody,
   );
   assert.ok(
-    second.status() === 401 &&
-      secondBody.includes("the login was already completed"),
+    second.status() === 400 &&
+      secondBody.includes("no login cookie for this state"),
     secondBody,
   );
   return null;
 });
 
-test("callback without the browser binding does not consume the login", async ({
+test("callback without the login cookie leaves the login usable", async ({
   context,
   browser,
 }) => {
   const page = await context.newPage();
   let callbackUrl = null;
   // Hold the callback in this browser (CDP Fetch pauses redirect hops too);
-  // replay it from a browser without the binding cookie first.
+  // replay it from a browser without the login cookie first.
   const cdp = await context.newCDPSession(page);
   await cdp.send("Fetch.enable", {
     patterns: [{ urlPattern: `${QUERY_APP}/callback*` }],
@@ -194,7 +194,7 @@ test("callback without the browser binding does not consume the login", async ({
   await other.close();
   assert.ok(
     rejected.status() === 400 &&
-      rejectedBody.includes("browser binding cookie missing"),
+      rejectedBody.includes("no login cookie for this state"),
     rejectedBody,
   );
   await cdp.send("Fetch.disable");
@@ -215,23 +215,26 @@ test("expired login is rejected", async ({ context }) => {
   await keycloakLogin(page);
   await page.waitForLoadState("load");
   const body = await page.textContent("body");
-  assert.ok(body.includes("the login expired"), body);
+  // The login cookie's Max-Age equals the login lifetime, so the browser
+  // has already dropped it: the callback carries no login cookie.
+  assert.ok(body.includes("no login cookie for this state"), body);
   return null;
 });
 
-test("form_post login with SameSite=None binding", async ({ context }) => {
+test("form_post login completes and clears the login cookie", async ({
+  context,
+}) => {
   const { page, callback } = await signIn(context, FORM_APP);
   assert.ok(
     callback?.method === "POST",
     `callback ${JSON.stringify(callback?.method)}`,
   );
-  const binding = (await context.cookies()).find(
-    (c) => c.name === "__Host-hellhound_binding",
+  // The cross-site POST carried the SameSite=None login cookie, and the
+  // callback response expired it.
+  const pending = (await context.cookies()).filter((c) =>
+    c.name.startsWith("__Host-hellhound_login_"),
   );
-  assert.ok(
-    binding?.sameSite === "None" && binding?.secure,
-    `binding ${JSON.stringify(binding)}`,
-  );
+  assert.ok(pending.length === 0, `login cookies ${JSON.stringify(pending)}`);
   assert.ok(
     (await page.textContent("#email")) === "alice@example.test",
     "email",

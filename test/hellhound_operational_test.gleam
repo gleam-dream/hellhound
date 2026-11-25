@@ -1,12 +1,11 @@
 //// Operational behaviour: lifecycle and supervision, provider
-//// worker loss and restart, key rotation, bounded pending logins, atom and
+//// worker loss and restart, key rotation, atom and
 //// process growth.
 
 import exception
 import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/http/request
-import gleam/http/response
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/otp/actor
@@ -16,9 +15,7 @@ import gleam/time/duration
 import hellhound
 import hellhound/config
 import hellhound/testing
-import hellhound_login_test.{
-  authorize, browser, logged_in, param, settings, start,
-}
+import hellhound_login_test.{authorize, logged_in, param, settings, start}
 import hellhound_test_support as support
 
 fn wait_until(check: fn() -> Bool, tries: Int) -> Nil {
@@ -33,7 +30,7 @@ fn wait_until(check: fn() -> Bool, tries: Int) -> Nil {
 }
 
 fn can_begin(client: hellhound.Client) -> Bool {
-  case hellhound.begin_login(client, browser(), hellhound.default_login()) {
+  case hellhound.begin_login(client, hellhound.default_login()) {
     Ok(_) -> True
     Error(_) -> False
   }
@@ -63,7 +60,7 @@ pub fn provider_worker_crash_is_typed_and_recovers_test() {
   support.worker_kill(worker)
   // While the worker restarts and rediscovers, operations fail typed or
   // succeed; they never crash the caller.
-  case hellhound.begin_login(client, browser(), hellhound.default_login()) {
+  case hellhound.begin_login(client, hellhound.default_login()) {
     Ok(_) | Error(hellhound.LoginProviderUnavailable(_)) -> Nil
     Error(other) -> panic as string.inspect(other)
   }
@@ -89,7 +86,7 @@ pub fn supervised_client_discovers_in_the_background_test() {
     |> config.with_destinations(config.AllowLoopbackForTesting)
   let assert Ok(client) = hellhound.new(unreachable)
   with_supervised(client, fn() {
-    assert hellhound.begin_login(client, browser(), hellhound.default_login())
+    assert hellhound.begin_login(client, hellhound.default_login())
       == Error(hellhound.LoginProviderUnavailable(hellhound.ProviderNotReady))
   })
   // A reachable provider: ready shortly after the child started.
@@ -164,9 +161,9 @@ pub fn service_client_starts_without_login_test() {
   let assert Ok(provider) = testing.start_provider(testing.provider_options())
   let assert Ok(client) = hellhound.new(testing.service_config(provider))
   let assert Ok(Nil) = hellhound.start(client)
-  assert hellhound.begin_login(client, browser(), hellhound.default_login())
+  assert hellhound.begin_login(client, hellhound.default_login())
     == Error(hellhound.LoginNotConfigured)
-  assert hellhound.complete_login(client, browser())
+  assert hellhound.complete_login(client, request.new())
     == Error(hellhound.LoginNotConfigured)
   let assert Ok(_) = hellhound.client_credentials(client, [])
   hellhound.stop(client)
@@ -185,27 +182,11 @@ pub fn signing_key_rotation_refreshes_keys_test() {
   support.provider_stop(provider)
 }
 
-pub fn pending_logins_are_bounded_test() {
-  let provider = support.provider_start(support.Standard)
-  let client = start(settings(provider) |> config.with_max_pending_logins(5))
-  let results =
-    list.repeat(Nil, 8)
-    |> list.map(fn(_) {
-      hellhound.begin_login(client, browser(), hellhound.default_login())
-    })
-  assert list.count(results, fn(r) {
-      r == Error(hellhound.TooManyPendingLogins)
-    })
-    == 3
-  hellhound.stop(client)
-  support.provider_stop(provider)
-}
-
 pub fn hostile_callbacks_create_no_atoms_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let state = param(hellhound.login_url(redirect), "state")
   let before = support.atom_count()
   list.repeat(Nil, 500)
@@ -259,45 +240,6 @@ pub fn repeated_logins_do_not_leak_processes_test() {
   let _ = authorize
   hellhound.stop(client)
   support.provider_stop(provider)
-}
-
-/// The login response is a 303 with the binding cookie Hellhound owns:
-/// `__Host-`, `Secure`, `HttpOnly`, `Path=/`, `SameSite` by response mode,
-/// and no caching.
-pub fn login_response_sets_the_binding_cookie_safely_test() {
-  let assert Ok(provider) = testing.start_provider(testing.provider_options())
-  let cookie_of = fn(mode) {
-    let assert Ok(client) =
-      hellhound.new(
-        testing.config(provider, "https://app.test/callback")
-        |> config.with_response_mode(mode),
-      )
-    let assert Ok(Nil) = hellhound.start(client)
-    let assert Ok(redirect) =
-      hellhound.begin_login(client, browser(), hellhound.default_login())
-    let reply = hellhound.login_response(response.new(200), redirect)
-    hellhound.stop(client)
-    assert reply.status == 303
-    assert response.get_header(reply, "location")
-      == Ok(hellhound.login_url(redirect))
-    assert response.get_header(reply, "cache-control") == Ok("no-store")
-    let assert Ok(cookie) = response.get_header(reply, "set-cookie")
-    cookie
-  }
-  let query = cookie_of(config.Query)
-  assert string.starts_with(query, "__Host-hellhound_binding=")
-  list.each(
-    ["Secure", "HttpOnly", "Path=/", "SameSite=Lax", "Max-Age=900"],
-    fn(attribute) {
-      assert #(attribute, string.contains(query, attribute))
-        == #(attribute, True)
-    },
-  )
-  assert !string.contains(query, "Domain")
-  let form = cookie_of(config.FormPost)
-  assert string.contains(form, "SameSite=None")
-  assert string.contains(form, "Secure")
-  testing.stop_provider(provider)
 }
 
 /// The provider-cache call waits as long as a key fetch can take.

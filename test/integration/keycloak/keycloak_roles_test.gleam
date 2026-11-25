@@ -12,7 +12,6 @@
 import exception
 import gleam/dynamic/decode
 import gleam/erlang/process
-import gleam/http/request
 import gleam/list
 import gleam/option.{Some}
 import gleam/time/duration
@@ -42,7 +41,7 @@ fn start(clock: support.Clock) -> hellhound.Client {
 
 fn sign_in(client: hellhound.Client) -> hellhound.Session {
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let assert Ok(support.Query(query)) =
     support.keycloak_login(
       hellhound.login_url(redirect),

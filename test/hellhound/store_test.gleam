@@ -4,14 +4,12 @@
 
 import exception
 import gleam/erlang/process
-import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
 import gleam/time/timestamp
 import hellhound/internal/memory_store
 import hellhound/internal/port
-import hellhound/internal/secure
 import hellhound/store
 import hellhound/testing
 import hellhound_test_support as support
@@ -50,52 +48,6 @@ fn record(key: String, expires: Int) -> store.Record {
     expires_at: timestamp.from_unix_seconds(expires),
     sealed: <<1>>,
   )
-}
-
-/// The built-in login store's capacity: expired records free room, a full
-/// store refuses inserts without a scan, and replaces are never refused.
-pub fn the_memory_store_is_bounded_test() {
-  let clock = support.clock_new(1000)
-  let name = process.new_name("bounded_store_test")
-  let assert Ok(_) =
-    memory_store.start(name, Some(2), fn() { support.clock_read(clock) })
-  let bounded = memory_store.store(process.named_subject(name), 5000)
-  assert store.put(bounded, record("a", 1010), store.Absent)
-    == Ok(store.Written)
-  assert store.put(bounded, record("b", 1010), store.Absent)
-    == Ok(store.Written)
-  assert store.put(bounded, record("c", 1010), store.Absent)
-    == Error(store.StoreFull)
-  // A replace of a present record is not an insert.
-  assert store.put(
-      bounded,
-      store.Record(..record("a", 1010), version: 2),
-      store.AtVersion(1),
-    )
-    == Ok(store.Written)
-  support.clock_set(clock, 1010)
-  assert store.put(bounded, record("c", 2000), store.Absent)
-    == Ok(store.Written)
-  assert store.put(bounded, record("d", 2000), store.Absent)
-    == Ok(store.Written)
-}
-
-pub fn a_full_store_answers_without_scanning_test() {
-  let capacity = 100_000
-  let name = process.new_name("full_store_test")
-  let assert Ok(_) = memory_store.start(name, Some(capacity), fn() { 0 })
-  let full = memory_store.store(process.named_subject(name), 5000)
-  int.range(from: 0, to: capacity, with: Nil, run: fn(_, i) {
-    let assert Ok(store.Written) =
-      store.put(full, record(int.to_string(i), 100), store.Absent)
-    Nil
-  })
-  let started = secure.monotonic_ms()
-  list.each(list.repeat(Nil, 50), fn(_) {
-    assert store.put(full, record("extra", 100), store.Absent)
-      == Error(store.StoreFull)
-  })
-  assert secure.monotonic_ms() - started < 200
 }
 
 /// A store call that outlives the store timeout fails typed, and its late
@@ -169,7 +121,7 @@ pub fn a_queued_guard_refuses_at_exact_expiry_test() {
   let clock = support.clock_new(99)
   let name = process.new_name("queued_guard")
   let assert Ok(started) =
-    memory_store.start(name, None, fn() { support.clock_read(clock) })
+    memory_store.start(name, fn() { support.clock_read(clock) })
   use <- exception.defer(fn() {
     process.unlink(started.pid)
     process.kill(started.pid)

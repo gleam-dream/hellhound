@@ -39,7 +39,7 @@
 ////   hellhound.new(testing.config(provider, "https://app.test/callback"))
 //// let assert Ok(Nil) = hellhound.start(client)
 ////
-//// let assert Ok(redirect) = hellhound.begin_login(client, browser, hellhound.default_login())
+//// let assert Ok(redirect) = hellhound.begin_login(client, hellhound.default_login())
 //// let assert Ok(callback) = testing.authorize(provider, redirect, subject: "ada")
 //// let assert Ok(session) = hellhound.complete_login(client, callback)
 //// ```
@@ -847,7 +847,7 @@ pub fn rotate_signing_key(provider: Provider) -> Nil {
 /// Play the browser and the provider's login page in process: accept the
 /// authorization request in `redirect` for `subject` and return the
 /// callback request Hellhound expects (the query, or a form post, with the
-/// binding cookie). `subject` overrides the provider's `LoginDecision`.
+/// login cookie). `subject` overrides the provider's `LoginDecision`.
 pub fn authorize(
   provider: Provider,
   redirect: LoginRedirect,
@@ -887,7 +887,7 @@ pub fn authorize(
     request.to(front.redirect_uri)
     |> result.replace_error(AuthorizationRefused("bad redirect_uri")),
   )
-  let cookie = binding_cookie(redirect)
+  let cookie = login_cookie(redirect)
   let target = request.set_header(target, "cookie", cookie)
   case front.form_post {
     True ->
@@ -1112,8 +1112,8 @@ fn html_escape(text: String) -> String {
   |> string.replace("'", "&#39;")
 }
 
-/// The browser's binding cookie as Hellhound set it.
-fn binding_cookie(redirect: LoginRedirect) -> String {
+/// The login cookie as Hellhound set it, as a `name=value` pair.
+fn login_cookie(redirect: LoginRedirect) -> String {
   hellhound.login_response(response.new(200), redirect).headers
   |> list.find_map(fn(header) {
     case header.0 == "set-cookie" {
@@ -1128,10 +1128,10 @@ fn binding_cookie(redirect: LoginRedirect) -> String {
   |> result.unwrap("")
 }
 
-/// A request from the same browser (it carries the binding cookie of an
-/// earlier login), for `hellhound.begin_login`.
+/// A request from the browser that started the login in `redirect`: it
+/// carries that login's cookie.
 pub fn browser_request(redirect: LoginRedirect) -> Request(String) {
-  request.new() |> request.set_header("cookie", binding_cookie(redirect))
+  request.new() |> request.set_header("cookie", login_cookie(redirect))
 }
 
 // ===========================================================================
@@ -1247,7 +1247,7 @@ pub fn issue_access_token(provider: Provider, spec: TokenSpec) -> String {
 /// implementation of the `hellhound/store` contract, for tests and for wrapping
 /// with delays or failures.
 pub fn memory_store() -> Store {
-  let assert Ok(subject) = memory_store.start_linked(None)
+  let assert Ok(subject) = memory_store.start_linked()
   memory_store.store(subject, 5000)
 }
 

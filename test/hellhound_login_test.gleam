@@ -1,11 +1,9 @@
-//// Login orchestration against the scripted in-process provider: atomic
-//// consumption under contention, the clock sampled at consumption, store
-//// loss, exchange outcomes, identity rejection, custody recovery and the
-//// login bound. Every provider request crosses Hellhound's real TLS transport.
+//// Login orchestration against the scripted in-process provider: duplicate
+//// callbacks, expiry, exchange outcomes, identity rejection, custody
+//// recovery and the login bound. Every provider request crosses Hellhound's real TLS transport.
 
 import gleam/dict
 import gleam/dynamic/decode
-import gleam/erlang/process
 import gleam/http
 import gleam/http/request.{type Request}
 import gleam/list
@@ -55,13 +53,8 @@ pub fn param(url: String, name: String) -> String {
   value
 }
 
-/// A request from a browser without a binding cookie.
-pub fn browser() -> Request(String) {
-  request.new()
-}
-
 /// Act as the browser and provider front channel: register a code for the
-/// login's nonce and build the callback request with the binding cookie.
+/// login's nonce and build the callback request with the login cookie.
 pub fn authorize(
   provider: support.Provider,
   redirect: hellhound.LoginRedirect,
@@ -76,7 +69,7 @@ pub fn authorize(
   ])
 }
 
-/// A GET callback with these parameters and the redirect's binding cookie.
+/// A GET callback with these parameters and the redirect's login cookie.
 pub fn callback(
   redirect: hellhound.LoginRedirect,
   params: List(#(String, String)),
@@ -92,7 +85,7 @@ pub fn logged_in(
   client: hellhound.Client,
 ) -> hellhound.Session {
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let code = "code-" <> param(hellhound.login_url(redirect), "state")
   let assert Ok(session) =
     hellhound.complete_login(client, authorize(provider, redirect, code))
@@ -125,10 +118,8 @@ pub fn login_issues_identity_with_custom_claims_test() {
 pub fn authorization_url_carries_s256_and_fresh_material_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))
-  let assert Ok(a) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
-  let assert Ok(b) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+  let assert Ok(a) = hellhound.begin_login(client, hellhound.default_login())
+  let assert Ok(b) = hellhound.begin_login(client, hellhound.default_login())
   let a_url = hellhound.login_url(a)
   let b_url = hellhound.login_url(b)
   assert param(a_url, "code_challenge_method") == "S256"
@@ -148,42 +139,25 @@ pub fn authorization_url_carries_s256_and_fresh_material_test() {
   support.provider_stop(provider)
 }
 
-/// One browser keeps one binding across tabs: a second login from a browser
-/// that holds the cookie reuses it, and both callbacks complete.
-pub fn one_binding_covers_concurrent_tabs_test() {
-  let provider = support.provider_start(support.Standard)
-  let client = start(settings(provider))
-  let assert Ok(first) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
-  let assert Ok(second) =
-    hellhound.begin_login(
-      client,
-      testing.browser_request(first),
-      hellhound.default_login(),
-    )
-  assert testing.browser_request(first).headers
-    == testing.browser_request(second).headers
-  let assert Ok(_) =
-    hellhound.complete_login(client, authorize(provider, second, "tab-2"))
-  let assert Ok(_) =
-    hellhound.complete_login(client, authorize(provider, first, "tab-1"))
-  hellhound.stop(client)
-  support.provider_stop(provider)
-}
-
-pub fn racing_callbacks_consume_once_test() {
+/// One callback sent many times at once yields one session. The provider's
+/// single-use authorization code refuses the duplicates.
+pub fn racing_callbacks_complete_once_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let request = authorize(provider, redirect, "race-code")
   let attempt = fn() { hellhound.complete_login(client, request) }
   let results = support.spawn_collect(list.repeat(attempt, 16), 30_000)
   let completed = list.count(results, fn(r) { result_is_ok(r) })
   assert completed == 1
-  assert list.count(results, fn(r) { r == Error(hellhound.LoginReplayed) })
+  // No server state refuses the duplicates: each reaches the token
+  // endpoint, which accepts the authorization code once.
+  assert list.count(results, fn(r) {
+      r == Error(hellhound.ExchangeRejected(hellhound.InvalidGrant))
+    })
     == 15
-  assert support.token_requests(provider) == 1
+  assert support.token_requests(provider) == 16
   hellhound.stop(client)
   support.provider_stop(provider)
 }
@@ -193,36 +167,6 @@ fn result_is_ok(r: Result(a, b)) -> Bool {
     Ok(_) -> True
     Error(_) -> False
   }
-}
-
-/// The clock moves to exactly `expires_at` between the lookup and the
-/// consumption; consumption samples the clock itself, so the login expires
-/// and no token request is sent.
-pub fn clock_is_sampled_at_consumption_test() {
-  let provider = support.provider_start(support.Standard)
-  let base = support.now_seconds()
-  let clock = support.clock_new(base)
-  let #(logins, control) = faults.memory()
-  let client =
-    start(
-      settings(provider)
-      |> config.with_login_lifetime(duration.seconds(60))
-      |> config.with_transaction_store(logins)
-      |> config.with_sealing_key(faults.sealing_key())
-      |> with_clock(clock),
-    )
-  let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
-  let request = authorize(provider, redirect, "held-code")
-  support.clock_set(clock, base + 59)
-  faults.set(control, fn(f) {
-    faults.Faults(..f, after_get: fn() { support.clock_set(clock, base + 60) })
-  })
-  assert hellhound.complete_login(client, request)
-    == Error(hellhound.LoginExpired)
-  assert support.token_requests(provider) == 0
-  hellhound.stop(client)
-  support.provider_stop(provider)
 }
 
 pub fn one_second_before_expiry_completes_test() {
@@ -236,49 +180,10 @@ pub fn one_second_before_expiry_completes_test() {
       |> with_clock(clock),
     )
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let request = authorize(provider, redirect, "edge-code")
   support.clock_set(clock, base + 59)
   let assert Ok(_) = hellhound.complete_login(client, request)
-  hellhound.stop(client)
-  support.provider_stop(provider)
-}
-
-pub fn store_loss_never_authorises_exchange_test() {
-  let provider = support.provider_start(support.Standard)
-  let client = start(settings(provider))
-  let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
-  let request = authorize(provider, redirect, "lost-code")
-  // The in-memory login store restarts empty under supervision.
-  let assert Some(name) = client.names.memory_logins
-  let assert Ok(pid) = process.named(name)
-  process.kill(pid)
-  process.sleep(50)
-  let assert Error(hellhound.CallbackRejected(hellhound.UnknownState)) =
-    hellhound.complete_login(client, request)
-  assert support.token_requests(provider) == 0
-  hellhound.stop(client)
-  support.provider_stop(provider)
-}
-
-pub fn store_timeout_is_typed_and_sends_nothing_test() {
-  let provider = support.provider_start(support.Standard)
-  let #(logins, control) = faults.memory()
-  let client =
-    start(
-      settings(provider)
-      |> config.with_store_timeout(duration.milliseconds(200))
-      |> config.with_transaction_store(logins)
-      |> config.with_sealing_key(faults.sealing_key()),
-    )
-  let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
-  let request = authorize(provider, redirect, "slow-code")
-  faults.set(control, fn(f) { faults.Faults(..f, get_delay_ms: 500) })
-  let assert Error(hellhound.TransactionStoreUnavailable) =
-    hellhound.complete_login(client, request)
-  assert support.token_requests(provider) == 0
   hellhound.stop(client)
   support.provider_stop(provider)
 }
@@ -290,15 +195,16 @@ fn exchange_outcome(
   let provider = support.provider_start(support.Standard)
   let client = start(configure(settings(provider)))
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let code = "code-" <> param(hellhound.login_url(redirect), "state")
   let request = authorize(provider, redirect, code)
   support.script(provider, support.Code(code), behaviour)
   let result = hellhound.complete_login(client, request)
-  // The login is consumed whatever the outcome: a retry is a replay and
-  // sends nothing.
-  let assert Error(hellhound.LoginReplayed) =
-    hellhound.complete_login(client, request)
+  // The callback response expires the login cookie, so the browser's retry
+  // of the same callback carries none and sends nothing.
+  let retry = request.Request(..request, headers: [])
+  let assert Error(hellhound.CallbackRejected(hellhound.LoginCookieMissing)) =
+    hellhound.complete_login(client, retry)
   let requests = support.token_requests(provider)
   hellhound.stop(client)
   support.provider_stop(provider)
@@ -394,43 +300,17 @@ pub fn complete_login_has_one_bound_test() {
   assert secure.monotonic_ms() - started < 2500
 }
 
-/// A login store slow enough to use up the bound: the code is never sent.
-pub fn exhausted_login_bound_sends_nothing_test() {
-  let provider = support.provider_start(support.Standard)
-  let #(logins, control) = faults.memory()
-  let client =
-    start(
-      settings(provider)
-      |> config.with_login_timeout(duration.milliseconds(300))
-      |> config.with_transaction_store(logins)
-      |> config.with_sealing_key(faults.sealing_key()),
-    )
-  let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
-  let request = authorize(provider, redirect, "bounded-code")
-  faults.set(control, fn(f) { faults.Faults(..f, get_delay_ms: 400) })
-  let result = hellhound.complete_login(client, request)
-  assert result == Error(hellhound.LoginTimedOut)
-    || result == Error(hellhound.TransactionStoreUnavailable)
-  assert support.token_requests(provider) == 0
-  hellhound.stop(client)
-  support.provider_stop(provider)
-}
-
 pub fn provider_down_before_exchange_is_proven_not_sent_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let request = authorize(provider, redirect, "down-code")
   support.provider_stop(provider)
   let assert Error(hellhound.ProviderUnavailableBeforeExchange(hellhound.TransportFailure(
     evidence: hellhound.NotSent,
     reason: hellhound.ConnectionRefused,
   ))) = hellhound.complete_login(client, request)
-  // Consumed all the same: a new login is needed.
-  let assert Error(hellhound.LoginReplayed) =
-    hellhound.complete_login(client, request)
   hellhound.stop(client)
 }
 
@@ -445,7 +325,7 @@ pub fn lost_custody_acknowledgement_recovers_without_exchange_test() {
       |> config.with_sealing_key(faults.sealing_key()),
     )
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let request = authorize(provider, redirect, "custody-code")
   faults.lose_ack_of(control, 1)
   let assert Error(hellhound.CustodyUnconfirmed(recovery) as error) =
@@ -489,7 +369,7 @@ pub fn old_custody_recovery_expires_test() {
       |> with_clock(clock),
     )
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let request = authorize(provider, redirect, "old-code")
   faults.lose_ack_of(control, 1)
   let assert Error(hellhound.CustodyUnconfirmed(recovery)) =
@@ -510,12 +390,11 @@ pub fn max_age_requires_recent_authentication_test() {
       max_age: Some(duration.seconds(age)),
     )
   }
-  let assert Ok(strict) = hellhound.begin_login(client, browser(), options(1))
+  let assert Ok(strict) = hellhound.begin_login(client, options(1))
   assert param(hellhound.login_url(strict), "max_age") == "1"
   let assert Error(hellhound.IdentityRejected(hellhound.AuthenticationTooOld)) =
     hellhound.complete_login(client, authorize(provider, strict, "strict-code"))
-  let assert Ok(relaxed) =
-    hellhound.begin_login(client, browser(), options(300))
+  let assert Ok(relaxed) = hellhound.begin_login(client, options(300))
   let assert Ok(_) =
     hellhound.complete_login(
       client,
@@ -536,7 +415,6 @@ pub fn future_authentication_time_fails_max_age_test() {
   let assert Ok(redirect) =
     hellhound.begin_login(
       client,
-      browser(),
       hellhound.LoginOptions(
         ..hellhound.default_login(),
         max_age: Some(duration.seconds(300)),
@@ -551,15 +429,15 @@ pub fn future_authentication_time_fails_max_age_test() {
   support.provider_stop(provider)
 }
 
-/// Pending-login lifetimes are wall-clock Unix time, so a durable login
-/// store shared by several nodes agrees on them.
+/// Pending-login lifetimes are wall-clock Unix time, so nodes sharing a
+/// sealing key agree on them.
 pub fn login_lifetime_follows_the_wall_clock_test() {
   let provider = support.provider_start(support.Standard)
   let base = support.now_seconds()
   let clock = support.clock_new(base)
   let client = start(settings(provider) |> with_clock(clock))
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let request = authorize(provider, redirect, "wall-code")
   support.clock_set(clock, base + 601)
   assert hellhound.complete_login(client, request)
@@ -580,7 +458,6 @@ pub fn slightly_future_authentication_time_is_tolerated_test() {
   let assert Ok(redirect) =
     hellhound.begin_login(
       client,
-      browser(),
       hellhound.LoginOptions(
         ..hellhound.default_login(),
         max_age: Some(duration.seconds(300)),
@@ -601,7 +478,6 @@ pub fn login_options_are_validated_test() {
   let with = fn(extra) {
     hellhound.begin_login(
       client,
-      browser(),
       hellhound.LoginOptions(
         ..hellhound.default_login(),
         extra_parameters: extra,
@@ -625,7 +501,6 @@ pub fn login_options_are_validated_test() {
   ))) =
     hellhound.begin_login(
       client,
-      browser(),
       hellhound.LoginOptions(
         ..hellhound.default_login(),
         login_hint: Some(string.repeat("h", 2049)),
@@ -637,7 +512,6 @@ pub fn login_options_are_validated_test() {
   let assert Error(hellhound.InvalidLoginOption(hellhound.InvalidOptionScope(_))) =
     hellhound.begin_login(
       client,
-      browser(),
       hellhound.LoginOptions(..hellhound.default_login(), scopes: ["bad scope"]),
     )
   hellhound.stop(client)
@@ -694,7 +568,7 @@ pub fn unadvertised_pkce_is_accepted_only_by_explicit_policy_test() {
     == Error(hellhound.ProviderIncompatible([hellhound.NoS256]))
   let client = start(assume(provider))
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   assert param(hellhound.login_url(redirect), "code_challenge_method") == "S256"
   assert string.length(param(hellhound.login_url(redirect), "code_challenge"))
     == 43
@@ -717,7 +591,7 @@ pub fn authorization_endpoint_query_is_preserved_test() {
   let provider = support.provider_start(support.QueryInAuthorizationEndpoint)
   let client = start(settings(provider))
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   assert param(hellhound.login_url(redirect), "p") == "b2c_1_signin"
   assert string.length(param(hellhound.login_url(redirect), "code_challenge"))
     == 43
@@ -776,7 +650,7 @@ pub fn missing_issuer_parameter_follows_policy_test() {
   let provider = support.provider_start(support.NoIssParameter)
   let client = start(settings(provider))
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let url = hellhound.login_url(redirect)
   support.issue_code(provider, "no-iss", param(url, "nonce"))
   let assert Ok(_) =
@@ -791,7 +665,7 @@ pub fn missing_issuer_parameter_follows_policy_test() {
       |> config.with_issuer_parameter(config.AlwaysRequireIssuer),
     )
   let assert Ok(redirect) =
-    hellhound.begin_login(strict, browser(), hellhound.default_login())
+    hellhound.begin_login(strict, hellhound.default_login())
   let url = hellhound.login_url(redirect)
   let assert Error(hellhound.CallbackRejected(hellhound.CallbackIssuerMissing)) =
     hellhound.complete_login(
@@ -807,7 +681,7 @@ pub fn denial_codes_are_closed_test() {
   let client = start(settings(provider))
   let deny = fn(code) {
     let assert Ok(redirect) =
-      hellhound.begin_login(client, browser(), hellhound.default_login())
+      hellhound.begin_login(client, hellhound.default_login())
     hellhound.complete_login(
       client,
       callback(redirect, [
@@ -834,7 +708,7 @@ pub fn form_post_mode_rejects_query_callbacks_test() {
   let client =
     start(settings(provider) |> config.with_response_mode(config.FormPost))
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   assert param(hellhound.login_url(redirect), "response_mode") == "form_post"
   let query = authorize(provider, redirect, "form-code")
   let assert Error(hellhound.CallbackMalformed(hellhound.UnexpectedResponseMode)) =
@@ -854,29 +728,6 @@ pub fn form_post_mode_rejects_query_callbacks_test() {
         "application/x-www-form-urlencoded",
       ),
     )
-  hellhound.stop(client)
-  support.provider_stop(provider)
-}
-
-/// The binding cookie is the browser's, and only its digest is stored: a
-/// callback without it, or with another browser's, is refused without
-/// consuming the login.
-pub fn callbacks_must_carry_this_browsers_binding_test() {
-  let provider = support.provider_start(support.Standard)
-  let client = start(settings(provider))
-  let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
-  let assert Ok(other) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
-  let request = authorize(provider, redirect, "bound-code")
-  let bare = request.Request(..request, headers: [])
-  assert hellhound.complete_login(client, bare)
-    == Error(hellhound.CallbackRejected(hellhound.BrowserBindingMissing))
-  let foreign =
-    request.Request(..request, headers: testing.browser_request(other).headers)
-  assert hellhound.complete_login(client, foreign)
-    == Error(hellhound.CallbackRejected(hellhound.BrowserBindingMismatch))
-  let assert Ok(_) = hellhound.complete_login(client, request)
   hellhound.stop(client)
   support.provider_stop(provider)
 }

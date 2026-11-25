@@ -5,7 +5,6 @@ import exception
 import gleam/bit_array
 import gleam/crypto
 import gleam/erlang/process
-import gleam/http/request
 import gleam/int
 import gleam/list
 import gleam/result
@@ -49,7 +48,7 @@ pub fn the_same_anchor_and_port_give_the_same_root_and_issuer_test() -> Nil {
   use <- exception.defer(fn() { hellhound.stop(client) })
   let assert Ok(Nil) = hellhound.start(client)
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let assert Ok(callback) = testing.authorize(second, redirect, subject: "ada")
   let assert Ok(session) = hellhound.complete_login(client, callback)
   hellhound.subject(hellhound.session_identity(session)) |> should.equal("ada")

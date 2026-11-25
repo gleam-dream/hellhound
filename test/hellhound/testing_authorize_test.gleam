@@ -89,7 +89,7 @@ pub fn http_login_signs_in_the_configured_user_test() {
       fn(c) { c },
     )
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let #(answer, callback) = follow(provider, redirect)
   assert answer.0 == 303
   assert header(answer, "cache-control") == Ok("no-store")
@@ -108,8 +108,7 @@ pub fn http_login_signs_in_the_configured_user_test() {
 pub fn default_user_login_hint_and_set_login_test() {
   let #(provider, client) = started(testing.provider_options(), fn(c) { c })
   let login = fn(options) {
-    let assert Ok(redirect) =
-      hellhound.begin_login(client, request.new(), options)
+    let assert Ok(redirect) = hellhound.begin_login(client, options)
     hellhound.complete_login(client, follow(provider, redirect).1)
   }
   let assert Ok(session) = login(hellhound.default_login())
@@ -145,7 +144,7 @@ pub fn http_login_with_form_post_test() {
       config.FormPost,
     ))
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let assert Ok(page) =
     https(
       Get,
@@ -182,7 +181,7 @@ pub fn http_login_with_form_post_test() {
 pub fn authorize_never_redirects_to_an_unverified_client_test() {
   let #(provider, client) = started(testing.provider_options(), fn(c) { c })
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let url = hellhound.login_url(redirect)
   let ca = testing.trust_anchor_pem(provider)
   // Another client id: 400, no redirect.
@@ -247,7 +246,6 @@ pub fn login_chooses_an_allowed_redirect_uri_test() {
   let choose = fn(uri) {
     hellhound.begin_login(
       client,
-      request.new(),
       hellhound.LoginOptions(
         ..hellhound.default_login(),
         redirect_uri: Some(uri),
@@ -345,7 +343,7 @@ pub fn access_token_audience_set_after_start_test() {
   let #(provider, client) = started(testing.provider_options(), fn(c) { c })
   let login = fn() {
     let assert Ok(redirect) =
-      hellhound.begin_login(client, request.new(), hellhound.default_login())
+      hellhound.begin_login(client, hellhound.default_login())
     let assert Ok(session) =
       hellhound.complete_login(client, follow(provider, redirect).1)
     let assert Ok(access) = hellhound.access_token(client, session)
@@ -394,7 +392,6 @@ pub fn granted_scopes_replace_the_requested_ones_per_subject_test() {
     let assert Ok(redirect) =
       hellhound.begin_login(
         client,
-        request.new(),
         hellhound.LoginOptions(..requested, login_hint: Some(hint)),
       )
     let assert Ok(session) =
