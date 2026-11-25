@@ -8,7 +8,6 @@
 //// bounded age is in `usage/authorization`. The design's "Application
 //// responsibilities" section states every obligation.
 
-import gleam/http/request
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/time/timestamp.{type Timestamp}
@@ -102,14 +101,14 @@ pub fn run() -> Nil {
     hellhound.new(testing.config(provider, "https://app.test/callback"))
   let assert Ok(Nil) = hellhound.start(client)
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let assert Ok(callback) =
     testing.authorize(provider, redirect, subject: "ada")
   let assert Ok(session) = hellhound.complete_login(client, callback)
   // The key names the user, whatever the email claims say.
   assert identity_key(session) == #(testing.issuer(provider), "ada")
   // Every action has a handling; failures map through the closed projections.
-  assert handle(hellhound.login_error_action(hellhound.LoginReplayed))
+  assert handle(hellhound.login_error_action(hellhound.LoginExpired))
     == SendThroughLoginAgain
   assert handle(hellhound.session_error_action(hellhound.SessionNotFound))
     == SendThroughLoginAgain

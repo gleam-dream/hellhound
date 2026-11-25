@@ -40,7 +40,7 @@ pub fn common_path_test() {
   let assert Ok(Nil) = hellhound.start(client)
   // GET /login
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   // The browser signs in at the provider and returns to the callback.
   let assert Ok(callback) =
     testing.authorize(provider, redirect, subject: "ada")
@@ -123,12 +123,11 @@ pub fn caller_owned_store_adapter_test() {
     hellhound.new(
       testing.config(provider, "https://app.test/callback")
       |> config.with_custody_store(adapter)
-      |> config.with_transaction_store(adapter)
       |> config.with_sealing_key(sealing_key),
     )
   let assert Ok(Nil) = hellhound.start(client)
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let assert Ok(callback) =
     testing.authorize(provider, redirect, subject: "ada")
   let assert Ok(session) = hellhound.complete_login(client, callback)
@@ -162,14 +161,12 @@ pub fn login_chooses_a_registered_redirect_uri_test() {
   let options = fn(uri) {
     hellhound.LoginOptions(..hellhound.default_login(), redirect_uri: Some(uri))
   }
-  let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), options(admin))
+  let assert Ok(redirect) = hellhound.begin_login(client, options(admin))
   let assert Ok(callback) =
     testing.authorize(provider, redirect, subject: "ada")
   assert callback.host == "admin.app.test"
   let assert Ok(_) = hellhound.complete_login(client, callback)
-  let assert Error(error) =
-    hellhound.begin_login(client, request.new(), options(admin <> "/"))
+  let assert Error(error) = hellhound.begin_login(client, options(admin <> "/"))
   assert error == hellhound.InvalidLoginOption(hellhound.RedirectUriNotAllowed)
   assert hellhound.login_error_action(error) == hellhound.FixConfiguration
   hellhound.stop(client)
@@ -177,15 +174,15 @@ pub fn login_chooses_a_registered_redirect_uri_test() {
 }
 
 pub fn login_errors_map_to_application_failures_test() {
-  let assert web.RetryLogin(_) = web.login_failure(hellhound.LoginReplayed)
+  let assert web.RetryLogin(_) = web.login_failure(hellhound.LoginExpired)
   let assert web.BadRequest(_) =
-    web.login_failure(hellhound.CallbackRejected(
-      hellhound.BrowserBindingMismatch,
-    ))
+    web.login_failure(hellhound.CallbackRejected(hellhound.LoginCookieMissing))
   let assert web.RetryLogin(_) =
     web.login_failure(hellhound.IdentityRejected(hellhound.NonceMismatch))
   let assert web.TryLater(_) =
-    web.login_failure(hellhound.LoginStoreUnavailable)
+    web.login_failure(hellhound.LoginProviderUnavailable(
+      hellhound.ProviderNotReady,
+    ))
 }
 
 pub fn caller_owned_claims_decode_test() {

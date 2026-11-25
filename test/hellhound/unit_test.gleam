@@ -445,7 +445,7 @@ pub fn session_lifetime_validation_test() {
 /// The login cookie seals the issuer, client id and redirect URI; a
 /// configuration whose login cookie could exceed 4 KiB is refused.
 pub fn login_cookie_must_fit_a_browser_cookie_test() {
-  let long = "https://app.example/" <> string.repeat("a", 2000)
+  let long = "https://app.example/" <> string.repeat("a", 2100)
   assert errors(config.with_allowed_redirect_uris(base(), [long]))
     == [config.LoginCookieTooLarge]
   let fits = "https://app.example/" <> string.repeat("a", 1900)

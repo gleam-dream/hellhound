@@ -100,7 +100,7 @@ fn sign_in() -> #(testing.Provider, hellhound.Client, web.Context, wisp.Request)
       post_logout_redirect_uri: origin <> "/logged-out",
       origin:,
     )
-  // GET /login: Hellhound's redirect and binding cookie.
+  // GET /login: Hellhound's redirect and login cookie.
   let login = simulate.browser_request(http.Get, "/login")
   let redirected = web.handle(login, context)
   assert redirected.status == 303
@@ -114,7 +114,7 @@ fn sign_in() -> #(testing.Provider, hellhound.Client, web.Context, wisp.Request)
     https(Get, authorize, "", testing.trust_anchor_pem(provider))
   let assert Ok(callback) = list.key_find(headers, "location")
   let assert Ok(#(_, path)) = string.split_once(callback, simulate.default_host)
-  // GET /callback with the binding cookie: signed in.
+  // GET /callback with the login cookie: signed in.
   let callback_request =
     simulate.browser_request(http.Get, path)
     |> simulate.session(login, redirected)

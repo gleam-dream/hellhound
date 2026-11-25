@@ -121,9 +121,9 @@ pub fn start(secret: String) -> Result(hellhound.Client, hellhound.StartError) {
   client
 }
 
-/// GET /login: Hellhound sets the browser-binding cookie and the redirect.
-pub fn login(client: hellhound.Client, req: Request(a)) -> Response(String) {
-  case hellhound.begin_login(client, req, hellhound.default_login()) {
+/// GET /login: the redirect to the provider and the sealed login cookie.
+pub fn login(client: hellhound.Client) -> Response(String) {
+  case hellhound.begin_login(client, hellhound.default_login()) {
     Ok(redirect) -> hellhound.login_response(response.new(303), redirect)
     Error(error) ->
       response.new(503)
@@ -135,13 +135,17 @@ pub fn login(client: hellhound.Client, req: Request(a)) -> Response(String) {
 pub fn callback(
   client: hellhound.Client,
   req: Request(String),
-) -> Result(String, hellhound.Action) {
+  signed_in: fn(String) -> Response(String),
+  failed: fn(hellhound.Action) -> Response(String),
+) -> Response(String) {
   case hellhound.complete_login(client, req) {
     // Keep the reference in the application's session.
-    Ok(session) -> Ok(hellhound.session_reference(session))
+    Ok(session) -> signed_in(hellhound.session_reference(session))
     // Reauthenticate, RejectRequest, Recover, ...
-    Error(error) -> Error(hellhound.login_error_action(error))
+    Error(error) -> failed(hellhound.login_error_action(error))
   }
+  // Whatever the outcome, the browser drops this login's cookie.
+  |> hellhound.callback_response(client, req)
 }
 
 /// Any later request: a current token, refreshed within 30 s of expiry;
@@ -177,6 +181,35 @@ The [complete module](consumer/src/hellhound_reference/usage/login.gleam) compil
 the reference consumer. Its [common-path test](consumer/test/hellhound_reference_test.gleam)
 exercises the equivalent login, token and logout flow against a local test provider.
 The application stores the session reference in its protected browser session.
+
+### How a pending login is kept
+
+The server stores nothing between `begin_login` and the callback. The pending
+login (state, nonce, PKCE verifier, redirect URI, issuer, client id and expiry)
+is sealed with AES-256-GCM into a cookie that `login_response` sets:
+
+- The cookie name is `__Secure-hellhound_login_` plus a digest of the state, so
+  logins started in several tabs keep separate cookies and each completes.
+- The cookie is `Secure`, `HttpOnly`, `SameSite=Lax` (`None` with form-post
+  callbacks), scoped to the path of the redirect URI and kept for the login
+  lifetime (10 minutes by default).
+- `complete_login` refuses a callback whose cookie is missing
+  (`LoginCookieMissing`), altered or sealed under another key or state
+  (`LoginCookieInvalid`), sealed by a client with another issuer or client id
+  (`ForeignLogin`), or past its lifetime (`LoginExpired`). None of these sends a
+  token request.
+- `callback_response` expires the login's cookie. Call it on the callback
+  response whatever `complete_login` returned.
+- Without `config.with_sealing_key` each client uses a random in-memory key, so a
+  callback must reach the node that started the login, before a restart. Give
+  every node that serves callbacks the same sealing key.
+
+Login starts hold no server capacity, so a flood of them cannot refuse other
+users' logins. Hellhound does not refuse a second callback that carries the same
+cookie and code: the provider accepts an authorization code once, and the PKCE
+verifier exists only in that cookie. RFC 6749 §4.1.2 asks a provider to revoke
+the tokens already issued for a code used twice, so a duplicated callback
+request can end the first session.
 
 ## Check a permission on current claims
 
