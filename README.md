@@ -387,6 +387,12 @@ configuration alone supplies no introspection credentials.
 - Provider traffic uses verified HTTPS and public destinations by default.
   Login checks issuer, audience, nonce and callback matching. Register every
   allowed callback address with the provider.
+- Rate-limit the route that calls `begin_login`. Every call stores one pending
+  login without authentication, and the record holds its place for twice the
+  login lifetime. With the defaults (100 000 records, 10 minutes) about 84
+  calls per second keep the built-in store full, and every login then fails
+  with `TooManyPendingLogins` until records expire. A durable store has no
+  such capacity unless its adapter enforces one, so the same traffic grows it.
 - `hellhound.stop` and the login deadline do not prove that every worker or external
   effect has finished. Keep borrowed resources alive for the required completion boundary.
 

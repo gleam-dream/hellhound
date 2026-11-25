@@ -833,6 +833,12 @@ const reserved_parameters = [
 /// and PKCE verifier from the OS CSPRNG, store the pending login and return
 /// the redirect. A browser that already holds a binding cookie keeps it, so
 /// concurrent logins in several tabs stay bound to one cookie.
+///
+/// Each call stores one record for an unauthenticated request, and the
+/// record holds its place for twice the login lifetime. The application
+/// rate-limits the route that calls this function: Hellhound does not, and a
+/// full built-in store fails every login with `TooManyPendingLogins` until
+/// records expire.
 pub fn begin_login(
   client: Client,
   request: Request(a),

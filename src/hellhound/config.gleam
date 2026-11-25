@@ -436,6 +436,10 @@ pub fn with_login_lifetime(config: Config, lifetime: Duration) -> Config {
 /// and recently completed ones (kept to detect replays). A full store
 /// answers `TooManyPendingLogins`. Between 1 and 10 000 000; default
 /// 100 000. A durable store enforces its own capacity (`store.StoreFull`).
+/// The capacity bounds memory; it is not a rate limit. A record holds its
+/// place for twice the login lifetime, so calls to `begin_login` arriving
+/// faster than the capacity divided by that time keep the store full. The
+/// application rate-limits its login route.
 pub fn with_max_pending_logins(config: Config, count: Int) -> Config {
   Settings(..config, max_pending_logins: count)
 }
