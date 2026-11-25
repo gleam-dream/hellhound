@@ -20,6 +20,7 @@ import gleam/dict
 import gleam/dynamic.{type Dynamic}
 import gleam/dynamic/decode
 import gleam/erlang/process.{type Subject}
+import gleam/erlang/reference.{type Reference}
 import gleam/int
 import gleam/json
 import gleam/list
@@ -345,14 +346,16 @@ pub opaque type Message {
   RenewalReported(admission: Admission, verdict: Verdict)
 }
 
-/// The answer to a claims renewal that asks to start.
+/// The answer to a claims renewal that asks to start. `incarnation` names
+/// the cache incarnation that answered: a report reaches the cache's name,
+/// which outlives a restart, so the next incarnation must not act on it.
 pub type Admission {
   /// The circuit is closed.
-  Admitted
+  Admitted(incarnation: Reference)
   /// The window ended: this renewal is the one probe. Its report closes the
   /// circuit or opens it again. `number` tells it from a probe that was
   /// taken as lost and replaced.
-  Probe(number: Int)
+  Probe(incarnation: Reference, number: Int)
   /// The circuit is open, or its probe is in flight. Nothing is sent.
   Paused
 }
@@ -408,6 +411,8 @@ type State {
     /// Monotonic milliseconds when the last unknown-key refresh started.
     last_key_refresh: Option(Int),
     renewals: Circuit,
+    /// Made when this incarnation starts; admissions carry it.
+    incarnation: Reference,
     /// Probes admitted by this incarnation; the next probe's number.
     probes: Int,
     /// Monotonic milliseconds; a test seam.
@@ -460,6 +465,7 @@ pub fn start(
       backoff_ms: first_backoff_ms,
       last_key_refresh: None,
       renewals: Closed,
+      incarnation: reference.new(),
       probes: 0,
       now:,
       fetch: Idle,
@@ -547,7 +553,7 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       let now = state.now()
       case state.renewals {
         Closed -> {
-          process.send(reply, Admitted)
+          process.send(reply, Admitted(state.incarnation))
           actor.continue(state)
         }
         Open(until) | Probing(until:, ..) if until > now -> {
@@ -557,7 +563,7 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
         // The window ended, or the probe never reported: one probe.
         Open(_) | Probing(..) -> {
           let number = state.probes + 1
-          process.send(reply, Probe(number))
+          process.send(reply, Probe(state.incarnation, number))
           actor.continue(
             State(
               ..state,
@@ -569,21 +575,29 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       }
     }
     RenewalReported(admission, verdict) ->
-      actor.continue(
-        State(..state, renewals: case verdict, admission, state.renewals {
-          Faulted, _, _ -> Open(state.now() + renewal_pause_ms)
-          // Only the probe that holds the circuit closes or releases it: a
-          // late report from a probe that was replaced changes nothing.
-          Answered, Probe(reported), Probing(number:, ..)
-            if reported == number
-          -> Closed
-          // The probe sent nothing: the next renewal probes in its place.
-          NothingLearned, Probe(reported), Probing(number:, ..)
-            if reported == number
-          -> Open(state.now())
-          _, _, renewals -> renewals
-        }),
-      )
+      case reported_here(admission, state.incarnation) {
+        // Admitted by an earlier incarnation: it says nothing about this
+        // circuit.
+        False -> actor.continue(state)
+        True ->
+          actor.continue(
+            State(..state, renewals: case verdict, admission, state.renewals {
+              Faulted, _, _ -> Open(state.now() + renewal_pause_ms)
+              // Only the probe that holds the circuit closes or releases
+              // it: a late report from a probe that was replaced changes
+              // nothing.
+              Answered, Probe(number: reported, ..), Probing(number:, ..)
+                if reported == number
+              -> Closed
+              // The probe sent nothing: the next renewal probes in its
+              // place.
+              NothingLearned, Probe(number: reported, ..), Probing(number:, ..)
+                if reported == number
+              -> Open(state.now())
+              _, _, renewals -> renewals
+            }),
+          )
+      }
     Discover ->
       case state.fetch {
         Idle -> {
@@ -786,8 +800,17 @@ pub fn admit_renewal(provider: Provider, lease_ms: Int) -> Admission {
     call.call(provider.subject, provider.timeout, RenewalAdmission(lease_ms, _))
   {
     Ok(admission) -> admission
-    Error(call.CalleeDown) -> Admitted
+    // No incarnation made this admission, so its report reaches none.
+    Error(call.CalleeDown) -> Admitted(reference.new())
     Error(call.CallTimedOut) -> Paused
+  }
+}
+
+fn reported_here(admission: Admission, incarnation: Reference) -> Bool {
+  case admission {
+    Admitted(incarnation: admitted) | Probe(incarnation: admitted, ..) ->
+      admitted == incarnation
+    Paused -> False
   }
 }
 

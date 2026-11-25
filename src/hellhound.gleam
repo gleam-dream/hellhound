@@ -2431,8 +2431,15 @@ fn renew_claims(
   let cache = client.backend.provider
   // A probe that never reports is taken as lost once the read could no
   // longer be running.
+  // The renewal waits at most the refresh wait for a reservation, spends
+  // one store call taking it, and then holds custody's dispatch lease, after
+  // which custody takes the dispatch as lost; a probe still running past
+  // that can only end as RefresherLost.
   let lease_ms =
-    client.settings.refresh_wait_ms + client.settings.request_timeout_ms + 1000
+    client.settings.refresh_wait_ms
+    + client.settings.store_timeout_ms
+    + lease_seconds(client.settings)
+    * 1000
   case provider.admit_renewal(cache, lease_ms) {
     provider.Paused -> #(
       Error(RefreshNotSent(RenewalPaused)),
