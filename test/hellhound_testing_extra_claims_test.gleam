@@ -5,7 +5,6 @@
 import exception
 import gleam/dict
 import gleam/dynamic/decode
-import gleam/http/request
 import gleam/json
 import gleam/list
 import gleam/option.{Some}
@@ -171,7 +170,7 @@ fn login(
   subject: String,
 ) -> hellhound.Session {
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let assert Ok(callback) = testing.authorize(provider, redirect, subject:)
   let assert Ok(session) = hellhound.complete_login(client, callback)
   session

@@ -2,9 +2,9 @@
 ////
 //// This module is the canonical owner of verified identity and sessions. A
 //// `VerifiedIdentity` exists only after Hellhound verified an ID token for a
-//// login transaction it consumed atomically, and compared the verified
-//// issuer, audience, authorized party, subject and nonce with that
-//// transaction. A `Session` exists only after custody confirmed the
+//// login transaction sealed into the browser's login cookie, and compared
+//// the verified issuer, audience, authorized party, subject and nonce with
+//// that transaction. A `Session` exists only after custody confirmed the
 //// installation of that identity and its tokens.
 ////
 //// ```gleam
@@ -12,14 +12,15 @@
 //// let assert Ok(Nil) = hellhound.start(client)   // or hellhound.supervised(client)
 ////
 //// // GET /login
-//// let assert Ok(redirect) = hellhound.begin_login(client, request, hellhound.default_login())
-//// hellhound.login_response(response.new(303), redirect)   // Location, binding cookie
+//// let assert Ok(redirect) = hellhound.begin_login(client, hellhound.default_login())
+//// hellhound.login_response(response.new(303), redirect)   // Location, login cookie
 ////
 //// // GET or POST /auth/callback
-//// case hellhound.complete_login(client, request) {
-////   Ok(session) -> hellhound.session_reference(session)    // keep in the app's session
-////   Error(error) -> hellhound.login_error_action(error)    // Reauthenticate, RejectRequest, ...
+//// let response = case hellhound.complete_login(client, request) {
+////   Ok(session) -> ...   // keep hellhound.session_reference(session) in the app's session
+////   Error(error) -> ...  // hellhound.login_error_action(error): Reauthenticate, RejectRequest, ...
 //// }
+//// hellhound.callback_response(response, client, request)   // drops the login cookie
 ////
 //// // Any later request
 //// use session <- result.try(hellhound.restore_session(client, reference))
@@ -64,7 +65,7 @@ import gleam/uri
 import hellhound/config.{type Config, type ConfigError}
 import hellhound/internal/callback
 import hellhound/internal/custody
-import hellhound/internal/logins
+import hellhound/internal/login
 import hellhound/internal/memory_store
 import hellhound/internal/native/client as native
 import hellhound/internal/native/provider
@@ -146,10 +147,6 @@ pub fn new(config: Config) -> Result(Client, StartError) {
         Some(_) -> None
         None -> Some(process.new_name("hellhound_custody"))
       },
-      memory_logins: case config.transaction_store {
-        Some(_) -> None
-        None -> Some(process.new_name("hellhound_logins"))
-      },
       pool: transport.new_pool(),
     )
   let keys = case config.sealing_key {
@@ -165,15 +162,6 @@ pub fn new(config: Config) -> Result(Client, StartError) {
         timeout_ms: timeout,
       )
     None, None -> panic as "hellhound.new: no custody store"
-  }
-  let logins_port = case config.transaction_store, names.memory_logins {
-    Some(store), _ -> port.Port(store:, timeout_ms: timeout)
-    None, Some(name) ->
-      port.Port(
-        store: memory_store.store(process.named_subject(name), timeout),
-        timeout_ms: timeout,
-      )
-    None, None -> panic as "hellhound.new: no login store"
   }
   let http =
     transport.Policy(..transport_policy(config), pool: Some(names.pool))
@@ -198,12 +186,6 @@ pub fn new(config: Config) -> Result(Client, StartError) {
       epoch: option.map(names.memory_custody, fn(name) {
         fn() { memory_store.epoch(process.named_subject(name), timeout) }
       }),
-    ),
-    logins: logins.Logins(
-      port: logins_port,
-      keys:,
-      clock: config.clock,
-      retention: config.login_lifetime_seconds,
     ),
     http:,
     correlation: None,
@@ -350,14 +332,14 @@ fn start_tree(
     |> result.replace_error(StartupTimedOut),
   )
   let accept = fn(metadata) { compatibility(settings, metadata) == [] }
-  let memory = fn(builder, name, capacity) {
+  let memory = fn(builder, name) {
     case name {
       None -> builder
       Some(name) ->
         supervisor.add(
           builder,
           supervision.worker(fn() {
-            memory_store.start(name, capacity, settings.clock)
+            memory_store.start(name, None, settings.clock)
           }),
         )
     }
@@ -379,15 +361,10 @@ fn start_tree(
     )
   let builder =
     builder
-    |> memory(names.memory_logins, Some(settings.max_pending_logins))
-    |> memory(names.memory_custody, None)
+    |> memory(names.memory_custody)
     |> supervisor.add(
       supervision.worker(fn() {
-        sweeper.start(
-          names.sweeper,
-          [client.custody.port, client.logins.port],
-          settings.clock,
-        )
+        sweeper.start(names.sweeper, [client.custody.port], settings.clock)
       }),
     )
   case supervisor.start(builder) {
@@ -716,10 +693,6 @@ fn to_telemetry_reason(reason: TransportReason) -> telemetry.TransportReason {
 // ===========================================================================
 // Login start
 
-/// The browser-binding cookie: a random value Hellhound sets when a login
-/// starts and checks at the callback. Transactions store only its digest.
-const binding_cookie = "__Host-hellhound_binding"
-
 pub type Prompt {
   PromptNone
   PromptLogin
@@ -765,12 +738,14 @@ pub fn default_login() -> LoginOptions {
   )
 }
 
-/// A started login: the provider URL and the browser binding to set.
+/// A started login: the provider URL and the sealed login cookie to set.
 /// `string.inspect` shows neither.
 pub opaque type LoginRedirect {
   LoginRedirect(
     url: Redacted(String),
-    binding: Redacted(String),
+    cookie_name: String,
+    cookie_value: Redacted(String),
+    path: String,
     same_site: cookie.SameSitePolicy,
     max_age: Int,
   )
@@ -782,9 +757,14 @@ pub fn login_url(redirect: LoginRedirect) -> String {
 }
 
 /// Turn `response` into the login redirect: `303 See Other` to the provider,
-/// the browser-binding cookie (`__Host-`, `Secure`, `HttpOnly`, `Path=/`,
-/// `SameSite=Lax`, or `None` for form-post callbacks, outliving the pending
-/// login by five minutes) and `Cache-Control: no-store`.
+/// the login cookie and `Cache-Control: no-store`.
+///
+/// The login cookie holds the pending login (state, nonce, PKCE verifier,
+/// redirect URI, issuer, client id and expiry) sealed with the client's
+/// sealing key. It is named `__Secure-hellhound_login_` followed by a digest
+/// of the state, so each login has its own cookie, and is `Secure`,
+/// `HttpOnly`, `SameSite=Lax` (`None` for form-post callbacks), scoped to the
+/// path of the login's redirect URI and kept for the login lifetime.
 pub fn login_response(
   response: Response(b),
   redirect: LoginRedirect,
@@ -793,18 +773,34 @@ pub fn login_response(
   |> response.set_header("location", redacted.reveal(redirect.url))
   |> response.set_header("cache-control", "no-store")
   |> response.set_cookie(
-    binding_cookie,
-    redacted.reveal(redirect.binding),
-    cookie.Attributes(
-      max_age: Some(redirect.max_age),
-      domain: None,
-      path: Some("/"),
-      secure: True,
-      http_only: True,
-      same_site: Some(redirect.same_site),
-    ),
+    redirect.cookie_name,
+    redacted.reveal(redirect.cookie_value),
+    login_cookie_attributes(redirect.path, redirect.same_site, redirect.max_age),
   )
   |> fn(r) { response.Response(..r, status: 303) }
+}
+
+fn login_cookie_attributes(
+  path: String,
+  same_site: cookie.SameSitePolicy,
+  max_age: Int,
+) -> cookie.Attributes {
+  cookie.Attributes(
+    max_age: Some(max_age),
+    domain: None,
+    path: Some(path),
+    secure: True,
+    http_only: True,
+    same_site: Some(same_site),
+  )
+}
+
+fn same_site(settings: Settings) -> cookie.SameSitePolicy {
+  case settings.response_mode {
+    settings.Query -> cookie.Lax
+    // The provider posts the callback from its own site.
+    settings.FormPost -> cookie.None
+  }
 }
 
 pub type LoginOptionProblem {
@@ -829,13 +825,15 @@ const reserved_parameters = [
   "client_assertion", "client_assertion_type", "registration", "id_token_hint",
 ]
 
-/// Begin a login for the browser that sent `request`: generate state, nonce
-/// and PKCE verifier from the OS CSPRNG, store the pending login and return
-/// the redirect. A browser that already holds a binding cookie keeps it, so
-/// concurrent logins in several tabs stay bound to one cookie.
+/// Begin a login: generate state, nonce and PKCE verifier from the OS
+/// CSPRNG and return the redirect, which carries the pending login sealed
+/// for the browser's login cookie. Send it with `login_response`.
+///
+/// The server stores nothing, so login starts need no capacity and cannot
+/// fill one. Each login has its own cookie, so logins started in several
+/// tabs of one browser complete independently.
 pub fn begin_login(
   client: Client,
-  request: Request(a),
   options: LoginOptions,
 ) -> Result(LoginRedirect, LoginError) {
   use _ <- result.try(case client.settings.mode {
@@ -857,10 +855,6 @@ pub fn begin_login(
     [] -> Ok(Nil)
     problems -> Error(LoginProviderIncompatible(problems))
   })
-  let binding = case binding_from(request) {
-    Some(binding) -> binding
-    None -> secure.random_token(32)
-  }
   let state = secure.random_token(32)
   let nonce = secure.random_token(32)
   let verifier = secure.random_token(32)
@@ -893,33 +887,26 @@ pub fn begin_login(
     redirect_uri:,
     client_id: client.settings.client_id,
   ))
-  let now = client.settings.clock()
   let lifetime = client.settings.login_lifetime_seconds
   let material =
-    logins.Material(
+    login.Material(
       state:,
       nonce:,
       verifier:,
       redirect_uri:,
-      browser_hash: secure.sha256_hex(binding),
       max_age: option.map(options.max_age, whole_seconds),
-      created_at: now,
-      expires_at: now + lifetime,
+      issuer: client.settings.issuer,
+      client_id: client.settings.client_id,
+      expires_at: client.settings.clock() + lifetime,
     )
-  case logins.put(client.logins, login_key(state), material) {
-    Ok(Nil) ->
-      Ok(LoginRedirect(
-        url: redacted.new(url),
-        binding: redacted.new(binding),
-        same_site: case client.settings.response_mode {
-          settings.Query -> cookie.Lax
-          settings.FormPost -> cookie.None
-        },
-        max_age: lifetime + 300,
-      ))
-    Error(logins.PutFull) -> Error(TooManyPendingLogins)
-    Error(logins.PutFailed) -> Error(LoginStoreUnavailable)
-  }
+  Ok(LoginRedirect(
+    url: redacted.new(url),
+    cookie_name: login.cookie_name(state),
+    cookie_value: redacted.new(login.seal(client.custody.keys, material)),
+    path: login.cookie_path(redirect_uri),
+    same_site: same_site(client.settings),
+    max_age: lifetime,
+  ))
 }
 
 /// The configured redirect URI, or the login's choice when it is exactly
@@ -940,23 +927,6 @@ fn login_redirect_uri(
         False -> Error(RedirectUriNotAllowed)
       }
   }
-}
-
-/// The browser's binding, when its cookie has the shape Hellhound generates
-/// (43 base64url characters).
-fn binding_from(request: Request(a)) -> Option(String) {
-  request.get_cookies(request)
-  |> list.find_map(fn(pair) {
-    case pair.0 == binding_cookie && valid_binding(pair.1) {
-      True -> Ok(pair.1)
-      False -> Error(Nil)
-    }
-  })
-  |> option.from_result
-}
-
-fn valid_binding(value: String) -> Bool {
-  string.length(value) == 43 && secure.base64url_only(value)
 }
 
 fn whole_seconds(value: Duration) -> Int {
@@ -1089,10 +1059,6 @@ fn check_authorization_url(
   }
 }
 
-fn login_key(state: String) -> String {
-  "login:" <> secure.sha256_hex(state)
-}
-
 // ===========================================================================
 // Login completion
 
@@ -1107,31 +1073,19 @@ pub type LoginError {
   LoginProviderUnavailable(ProviderFailure)
   /// Provider metadata is no longer compatible with Hellhound's policy.
   LoginProviderIncompatible(List(Incompatibility))
-  /// The login store did not confirm the new login.
-  LoginStoreUnavailable
-  /// The login store is at capacity.
-  TooManyPendingLogins
-  /// The callback is not a well-formed authorization response. No login was
-  /// touched.
+  /// The callback is not a well-formed authorization response. Nothing was
+  /// sent to the provider.
   CallbackMalformed(CallbackProblem)
-  /// The callback does not match a pending login of this browser. No login
-  /// was consumed.
+  /// The callback does not match a login cookie this browser holds for this
+  /// client. Nothing was sent to the provider.
   CallbackRejected(BindingProblem)
-  /// The login expired before its callback was consumed.
+  /// The login lifetime ran out before the callback. Nothing was sent to
+  /// the provider.
   LoginExpired
-  /// The login was already consumed by another callback.
-  LoginReplayed
-  /// The stored login changed between check and consumption.
-  LoginChanged
-  /// The login store did not answer; the login may or may not have been
-  /// consumed. Nothing was sent to the provider.
-  TransactionStoreUnavailable
-  /// The stored login did not open (tampering, or an unknown sealing key).
-  LoginRecordUnreadable
-  /// The provider returned an error response; the login is consumed.
+  /// The provider returned an error response. Nothing was sent to the
+  /// token endpoint.
   ProviderDenied(Denial)
-  /// The token request was proven not to have been sent. The login is
-  /// consumed; start a new login.
+  /// The token request was proven not to have been sent. Start a new login.
   ProviderUnavailableBeforeExchange(ProviderFailure)
   /// The token endpoint rejected the exchange.
   ExchangeRejected(OAuthError)
@@ -1141,7 +1095,7 @@ pub type LoginError {
   /// Tokens were returned but the identity was not accepted.
   IdentityRejected(IdentityProblem)
   /// The login timeout ran out before the code was exchanged; nothing was
-  /// sent. The login is consumed.
+  /// sent. Start a new login.
   LoginTimedOut
   /// Identity was verified and custody installation was submitted, but its
   /// outcome is unknown. Call `recover_custody`; the authorization code is
@@ -1173,12 +1127,18 @@ pub type CallbackProblem {
 }
 
 pub type BindingProblem {
-  /// No pending login has this state.
-  UnknownState
-  /// The browser-binding cookie is absent.
-  BrowserBindingMissing
-  /// The browser binding does not belong to this login.
-  BrowserBindingMismatch
+  /// The request carries no login cookie for the callback's state: the
+  /// callback comes from a browser that did not start this login, the
+  /// browser already sent this login's callback and its cookie was cleared,
+  /// or the cookie outlived its `Max-Age`.
+  LoginCookieMissing
+  /// The login cookie did not open: it was altered, sealed for another
+  /// state, or sealed under a key this client does not hold (for example an
+  /// ephemeral key from before a restart).
+  LoginCookieInvalid
+  /// The login was started by a client with another issuer or client id
+  /// that shares this client's sealing key.
+  ForeignLogin
   /// `iss` differs from the configured issuer (RFC 9207).
   CallbackIssuerMismatch
   /// `iss` is required by policy but absent.
@@ -1234,14 +1194,20 @@ pub type IdentityProblem {
 }
 
 /// Complete a login from the callback request (a `GET` with the query, or
-/// a form `POST`, per the configured response mode) and the browser's
-/// binding cookie.
+/// a form `POST`, per the configured response mode) and the login cookie it
+/// carries. Answer the request with `callback_response`, whatever the
+/// result, so the browser drops the login cookie.
 ///
-/// Order: parse strictly; find the pending login by state; compare state,
-/// browser binding and issuer without consuming; consume atomically; only a
-/// consumption confirmed by the store proceeds to exchange the code; verify
-/// the identity; install custody. The whole operation is bounded by the
-/// login timeout (default 30 s).
+/// Order: parse strictly; open the login cookie named by the callback's
+/// state; check its issuer, client id and expiry and the callback's `iss`;
+/// exchange the code with the sealed PKCE verifier; verify the identity;
+/// install custody. The whole operation is bounded by the login timeout
+/// (default 30 s).
+///
+/// The server keeps no record of the login, so it cannot refuse a second
+/// callback that carries the same cookie and code. The provider refuses the
+/// second exchange of an authorization code, and a browser that received
+/// `callback_response` no longer holds the cookie.
 pub fn complete_login(
   client: Client,
   request: Request(String),
@@ -1262,41 +1228,9 @@ fn complete(
 ) -> Result(Session, LoginError) {
   let deadline = started + client.settings.login_timeout_ms
   let remaining = fn() { deadline - secure.monotonic_ms() }
-  let logins_within = fn() {
-    logins.Logins(
-      ..client.logins,
-      port: port.within(client.logins.port, remaining()),
-    )
-  }
   use parsed <- result.try(parse_callback(client, request))
-  let state = case parsed {
-    callback.CodeResponse(state:, ..) | callback.ErrorResponse(state:, ..) ->
-      state
-  }
-  let key = login_key(state)
-  use lookup <- result.try(
-    logins.get(logins_within(), key)
-    |> result.replace_error(TransactionStoreUnavailable),
-  )
-  use #(material, version) <- result.try(case lookup {
-    logins.Found(material:, version:) -> Ok(#(material, version))
-    logins.FoundConsumed -> Error(LoginReplayed)
-    logins.FoundExpired -> Error(LoginExpired)
-    logins.NotFound -> Error(CallbackRejected(UnknownState))
-    logins.Unreadable -> Error(LoginRecordUnreadable)
-  })
-  use _ <- result.try(check_binding(client, parsed, material, request))
-  use decision <- result.try(
-    logins.consume(logins_within(), key, material, version)
-    |> result.replace_error(TransactionStoreUnavailable),
-  )
-  use material <- result.try(case decision {
-    logins.Consumed(material) -> Ok(material)
-    logins.AlreadyConsumed -> Error(LoginReplayed)
-    logins.Expired -> Error(LoginExpired)
-    logins.Changed -> Error(LoginChanged)
-    logins.Missing -> Error(CallbackRejected(UnknownState))
-  })
+  use material <- result.try(open_login(client, parsed, request))
+  use _ <- result.try(check_issuer_parameter(client, parsed))
   case parsed {
     callback.ErrorResponse(error:, ..) -> Error(ProviderDenied(denial(error)))
     callback.CodeResponse(code:, ..) ->
@@ -1345,35 +1279,56 @@ fn parse_callback(
   })
 }
 
-fn check_binding(
+/// The login this browser holds for the callback's state, sealed by this
+/// client and not expired.
+fn open_login(
   client: Client,
   parsed: callback.Parsed,
-  material: logins.Material,
   request: Request(String),
-) -> Result(Nil, LoginError) {
-  let #(state, issuer) = case parsed {
-    callback.CodeResponse(state:, issuer:, ..)
-    | callback.ErrorResponse(state:, issuer:, ..) -> #(state, issuer)
-  }
-  use _ <- result.try(case secure.constant_time_equal(state, material.state) {
-    True -> Ok(Nil)
-    False -> Error(CallbackRejected(UnknownState))
-  })
-  use binding <- result.try(case binding_from(request) {
-    Some(binding) -> Ok(binding)
-    None -> Error(CallbackRejected(BrowserBindingMissing))
-  })
+) -> Result(login.Material, LoginError) {
+  let state = callback_state(parsed)
+  let name = login.cookie_name(state)
+  use value <- result.try(
+    request.get_cookies(request)
+    |> list.key_find(name)
+    |> result.replace_error(CallbackRejected(LoginCookieMissing)),
+  )
+  use material <- result.try(
+    login.open(client.custody.keys, state, value)
+    |> result.replace_error(CallbackRejected(LoginCookieInvalid)),
+  )
   use _ <- result.try(
     case
-      secure.constant_time_equal(
-        secure.sha256_hex(binding),
-        material.browser_hash,
-      )
+      material.issuer == client.settings.issuer
+      && material.client_id == client.settings.client_id
     {
       True -> Ok(Nil)
-      False -> Error(CallbackRejected(BrowserBindingMismatch))
+      False -> Error(CallbackRejected(ForeignLogin))
     },
   )
+  case client.settings.clock() < material.expires_at {
+    True -> Ok(material)
+    False -> Error(LoginExpired)
+  }
+}
+
+fn callback_state(parsed: callback.Parsed) -> String {
+  case parsed {
+    callback.CodeResponse(state:, ..) | callback.ErrorResponse(state:, ..) ->
+      state
+  }
+}
+
+/// RFC 9207: the callback's `iss`, when present, is the configured issuer,
+/// and it is present when policy or the provider requires it.
+fn check_issuer_parameter(
+  client: Client,
+  parsed: callback.Parsed,
+) -> Result(Nil, LoginError) {
+  let issuer = case parsed {
+    callback.CodeResponse(issuer:, ..) | callback.ErrorResponse(issuer:, ..) ->
+      issuer
+  }
   let configured_issuer = client.settings.issuer
   case issuer {
     Some(value) ->
@@ -1399,6 +1354,36 @@ fn check_binding(
   }
 }
 
+/// Turn `response` into the answer to a login callback: expire the login
+/// cookie the callback names, so the browser holds it no longer. Call it
+/// with the request given to `complete_login`, whatever that returned. A
+/// request without a parseable state leaves `response` unchanged.
+pub fn callback_response(
+  response: Response(b),
+  client: Client,
+  request: Request(String),
+) -> Response(b) {
+  case parse_callback(client, request) {
+    Error(_) -> response
+    Ok(parsed) -> {
+      let name = login.cookie_name(callback_state(parsed))
+      let settings = client.settings
+      // The cookie was scoped to the path of the login's redirect URI,
+      // which is one of these.
+      [settings.redirect_uri, ..settings.allowed_redirect_uris]
+      |> list.map(login.cookie_path)
+      |> list.unique
+      |> list.fold(response, fn(response, path) {
+        response.expire_cookie(
+          response,
+          name,
+          login_cookie_attributes(path, same_site(settings), 0),
+        )
+      })
+    }
+  }
+}
+
 fn denial(code: String) -> Denial {
   case code {
     "access_denied" -> AccessDenied
@@ -1418,7 +1403,7 @@ fn denial(code: String) -> Denial {
 
 fn exchange(
   client: Client,
-  material: logins.Material,
+  material: login.Material,
   code: String,
   remaining: fn() -> Int,
 ) -> Result(Session, LoginError) {
@@ -1487,7 +1472,7 @@ fn identity_problem(reason: String, claim: Option(String)) -> IdentityProblem {
 /// backend did not.
 fn accept_identity(
   client: Client,
-  material: logins.Material,
+  material: login.Material,
   response: protocol.TokenResponse,
 ) -> Result(#(VerifiedIdentity, custody.Identity), IdentityProblem) {
   use id_token <- result.try(
@@ -1753,7 +1738,7 @@ fn install(
   client: Client,
   identity: VerifiedIdentity,
   sealed_identity: custody.Identity,
-  material: logins.Material,
+  material: login.Material,
   response: protocol.TokenResponse,
   remaining: fn() -> Int,
 ) -> Result(Session, LoginError) {
@@ -1849,11 +1834,8 @@ pub fn login_error_action(error: LoginError) -> Action {
     InvalidLoginOption(_) | LoginNotConfigured -> FixConfiguration
     LoginProviderIncompatible(_) -> FixConfiguration
     LoginProviderUnavailable(failure) -> failure_action(failure)
-    LoginStoreUnavailable | TooManyPendingLogins -> RetryLater
     CallbackMalformed(_) | CallbackRejected(_) -> RejectRequest
-    LoginRecordUnreadable -> RejectRequest
-    LoginExpired | LoginReplayed | LoginChanged -> Reauthenticate
-    TransactionStoreUnavailable -> Reauthenticate
+    LoginExpired -> Reauthenticate
     ProviderDenied(TemporarilyUnavailable) | ProviderDenied(ServerError) ->
       Reauthenticate
     ProviderDenied(_) -> Reauthenticate
@@ -1889,19 +1871,11 @@ pub fn describe_login_error(error: LoginError) -> String {
     LoginProviderIncompatible(problems) ->
       "the provider is incompatible: "
       <> string.join(list.map(problems, describe_incompatibility), "; ")
-    LoginStoreUnavailable -> "the login store did not confirm the login"
-    TooManyPendingLogins ->
-      "the login store is at capacity (with_max_pending_logins)"
     CallbackMalformed(problem) ->
       "malformed callback: " <> callback_problem_name(problem)
     CallbackRejected(problem) ->
       "callback rejected: " <> binding_problem_name(problem)
     LoginExpired -> "the login expired"
-    LoginReplayed -> "the login was already completed"
-    LoginChanged -> "the login changed while it was being completed"
-    TransactionStoreUnavailable ->
-      "the login store did not answer; nothing was sent"
-    LoginRecordUnreadable -> "the stored login did not open"
     ProviderDenied(_) -> "the provider denied the login"
     ProviderUnavailableBeforeExchange(failure) ->
       "the code was not exchanged: " <> describe_provider_failure(failure)
@@ -1936,9 +1910,9 @@ fn callback_problem_name(problem: CallbackProblem) -> String {
 
 fn binding_problem_name(problem: BindingProblem) -> String {
   case problem {
-    UnknownState -> "unknown state"
-    BrowserBindingMissing -> "browser binding cookie missing"
-    BrowserBindingMismatch -> "browser binding mismatch"
+    LoginCookieMissing -> "no login cookie for this state"
+    LoginCookieInvalid -> "the login cookie did not open"
+    ForeignLogin -> "the login belongs to another issuer or client"
     CallbackIssuerMismatch -> "iss mismatch"
     CallbackIssuerMissing -> "iss missing"
   }
@@ -2001,12 +1975,8 @@ fn emit_login(
     Ok(_) -> telemetry.LoginSucceeded
     Error(error) ->
       case error {
-        CallbackMalformed(_)
-        | CallbackRejected(_)
-        | LoginExpired
-        | LoginReplayed
-        | LoginChanged
-        | LoginRecordUnreadable -> telemetry.LoginCallbackRefused
+        CallbackMalformed(_) | CallbackRejected(_) | LoginExpired ->
+          telemetry.LoginCallbackRefused
         ProviderDenied(_) -> telemetry.LoginDenied
         ProviderUnavailableBeforeExchange(_)
         | ExchangeRejected(_)

@@ -10,9 +10,8 @@ import gleam/string
 import hellhound
 import hellhound/config
 import hellhound/internal/custody
-import hellhound/internal/logins
-import hellhound/internal/secure
-import hellhound_login_test.{browser, callback, param, start}
+import hellhound/internal/login
+import hellhound_login_test.{callback, param, start}
 import hellhound_test_support as support
 
 @external(erlang, "hellhound_capture_ffi", "start")
@@ -24,11 +23,7 @@ fn capture_stop() -> Nil
 @external(erlang, "hellhound_capture_ffi", "contains")
 fn captured(needle: String) -> Bool
 
-fn sha256_hex(value: String) -> String {
-  secure.sha256_hex(value)
-}
-
-fn binding_of(redirect: hellhound.LoginRedirect) -> String {
+fn cookie_of(redirect: hellhound.LoginRedirect) -> String {
   let assert Ok(cookie) =
     response.get_header(
       hellhound.login_response(response.new(200), redirect),
@@ -68,11 +63,11 @@ pub fn no_secret_reaches_errors_logs_or_telemetry_test() {
   // Collect every secret a flow creates, then run it to an error.
   let run = fn(code: String, behaviour: option.Option(support.Behaviour)) {
     let assert Ok(redirect) =
-      hellhound.begin_login(client, browser(), hellhound.default_login())
+      hellhound.begin_login(client, hellhound.default_login())
     let state = param(hellhound.login_url(redirect), "state")
     let nonce = param(hellhound.login_url(redirect), "nonce")
-    let assert Ok(logins.Found(material:, ..)) =
-      logins.get(client.logins, "login:" <> sha256_hex(state))
+    let assert Ok(material) =
+      login.open(client.custody.keys, state, cookie_of(redirect))
     support.issue_code(provider, code, nonce)
     case behaviour {
       Some(b) -> support.script(provider, support.Code(code), b)
@@ -87,7 +82,7 @@ pub fn no_secret_reaches_errors_logs_or_telemetry_test() {
           #("iss", issuer),
         ]),
       )
-    #(result, [code, state, nonce, material.verifier, binding_of(redirect)])
+    #(result, [code, state, nonce, material.verifier, cookie_of(redirect)])
   }
 
   let #(r1, s1) =
@@ -105,7 +100,7 @@ pub fn no_secret_reaches_errors_logs_or_telemetry_test() {
 
   // A denial with a secret-looking description.
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let denial =
     hellhound.complete_login(
       client,

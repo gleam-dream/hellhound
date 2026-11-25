@@ -4,7 +4,6 @@
 //// to that transaction. Client assertions Hellhound sends are verified
 //// independently by panva/jose at the provider.
 
-import gleam/http/request
 import gleam/list
 import gleam/option.{Some}
 import gleam/string
@@ -49,8 +48,7 @@ pub fn attempt(
 ) -> Result(hellhound.Session, hellhound.LoginError) {
   let options =
     hellhound.LoginOptions(..hellhound.default_login(), login_hint: Some(user))
-  let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), options)
+  let assert Ok(redirect) = hellhound.begin_login(client, options)
   let assert Ok(support.Query(query)) =
     support.authorize(hellhound.login_url(redirect), issuer)
   hellhound.complete_login(client, support.query_callback(redirect, query))
@@ -123,7 +121,7 @@ pub fn form_post_test() {
       |> config.with_response_mode(config.FormPost),
     )
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let assert Ok(support.FormPost(body)) =
     support.authorize(hellhound.login_url(redirect), issuer)
   let assert Ok(_) =

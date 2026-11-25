@@ -15,9 +15,7 @@ import gleam/time/timestamp
 import hellhound
 import hellhound/config
 import hellhound/telemetry
-import hellhound_login_test.{
-  authorize, browser, logged_in, settings, start, with_clock,
-}
+import hellhound_login_test.{authorize, logged_in, settings, start, with_clock}
 import hellhound_store_support as faults
 import hellhound_test_support as support
 import sinal
@@ -361,7 +359,7 @@ pub fn a_session_without_a_refresh_token_must_reauthenticate_test() {
   claims(provider, [issued_ago(1000)])
   let client = start(settings(provider))
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   support.script(provider, support.Code("code-1"), support.DropRefreshToken)
   let assert Ok(session) =
     hellhound.complete_login(client, authorize(provider, redirect, "code-1"))

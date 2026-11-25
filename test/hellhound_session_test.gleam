@@ -12,7 +12,7 @@ import gleam/time/duration
 import gleam/time/timestamp
 import hellhound
 import hellhound/config
-import hellhound_login_test.{browser, logged_in, settings, start, with_clock}
+import hellhound_login_test.{logged_in, settings, start, with_clock}
 import hellhound_store_support as faults
 import hellhound_test_support as support
 
@@ -705,7 +705,6 @@ pub fn a_closed_connection_reports_receive_failed_test() {
         reason: hellhound.ReceiveFailed,
       )),
     )
-  let _ = browser
   let _ = None
   hellhound.stop(client)
   support.provider_stop(provider)
