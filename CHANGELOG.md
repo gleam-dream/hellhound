@@ -8,8 +8,9 @@ minor version may break compatibility.
 ### Fixed
 
 - The renewal circuit takes a probe as lost only after the renewal can no
-  longer be running. Its lease left out the store calls, so a slow store let a
-  second probe start beside the first.
+  longer be running. Its lease left out the store calls, including a
+  reservation's retries after conflicts, so a slow store let a second probe
+  start beside the first.
 - A renewal report applies only to the provider-cache incarnation that
   admitted it. A report sent across a cache restart could open the new
   circuit, or close it while its probe was in flight.
