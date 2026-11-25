@@ -120,6 +120,32 @@ pub fn login_cookie_is_bound_to_its_state_test() {
   support.provider_stop(provider)
 }
 
+/// A cookie under any name but the `__Host-` one is ignored: a sibling
+/// subdomain can set `__Secure-` or unprefixed cookies for this host, so
+/// accepting them would let it plant its own pending login (login CSRF).
+pub fn login_cookie_without_host_prefix_is_ignored_test() {
+  let provider = support.provider_start(support.Standard)
+  let client = start(settings(provider))
+  let assert Ok(redirect) =
+    hellhound.begin_login(client, hellhound.default_login())
+  let request = authorize(provider, redirect, "planted-code")
+  let #(name, value) = login_cookie(redirect)
+  let assert Ok(#(_, suffix)) = string.split_once(name, "hellhound_login_")
+  list.each(
+    ["__Secure-hellhound_login_" <> suffix, "hellhound_login_" <> suffix],
+    fn(planted) {
+      assert hellhound.complete_login(
+          client,
+          with_cookies(request, [#(planted, value)]),
+        )
+        == Error(hellhound.CallbackRejected(hellhound.LoginCookieMissing))
+    },
+  )
+  assert support.token_requests(provider) == 0
+  hellhound.stop(client)
+  support.provider_stop(provider)
+}
+
 /// A callback from a browser that did not start the login (login CSRF) has
 /// no cookie for its state.
 pub fn callback_without_its_login_cookie_is_refused_test() {
@@ -241,7 +267,8 @@ pub fn login_flood_leaves_other_logins_working_test() {
   support.provider_stop(provider)
 }
 
-/// The login cookie is `__Secure-`, `HttpOnly`, scoped to the callback path,
+/// The login cookie is `__Host-`: `Secure`, `Path=/` and no `Domain`, so a
+/// sibling subdomain cannot set one for this host. It is `HttpOnly`,
 /// `SameSite=Lax` (`None` for form post) and lives one login lifetime. The
 /// callback response expires it.
 pub fn login_cookie_attributes_and_clearing_test() {
@@ -259,9 +286,9 @@ pub fn login_cookie_attributes_and_clearing_test() {
   let assert Ok(set) = response.get_header(reply, "set-cookie")
   let #(name, value) = login_cookie(redirect)
   assert string.starts_with(set, name <> "=" <> value <> ";")
-  assert string.starts_with(name, "__Secure-hellhound_login_")
+  assert string.starts_with(name, "__Host-hellhound_login_")
   list.each(
-    ["Secure", "HttpOnly", "Path=/auth/callback", "SameSite=Lax", "Max-Age=600"],
+    ["Secure", "HttpOnly", "Path=/;", "SameSite=Lax", "Max-Age=600"],
     fn(attribute) {
       assert #(attribute, string.contains(set, attribute)) == #(attribute, True)
     },
@@ -281,7 +308,10 @@ pub fn login_cookie_attributes_and_clearing_test() {
   let assert Ok(expiry) = response.get_header(cleared, "set-cookie")
   assert string.starts_with(expiry, name <> "=;")
   assert string.contains(expiry, "Max-Age=0")
-  assert string.contains(expiry, "Path=/auth/callback")
+  assert string.contains(expiry, "Path=/;")
+  assert !string.contains(expiry, "Domain")
+  // One expiry: the cookie has one path whatever the redirect URI.
+  assert list.count(cleared.headers, fn(h) { h.0 == "set-cookie" }) == 1
   hellhound.stop(client)
   let assert Ok(form_client) =
     hellhound.new(
@@ -298,6 +328,7 @@ pub fn login_cookie_attributes_and_clearing_test() {
     )
   assert string.contains(form_set, "SameSite=None")
   assert string.contains(form_set, "Secure")
+  assert string.contains(form_set, "Path=/;")
   hellhound.stop(form_client)
   testing.stop_provider(provider)
 }
