@@ -3,7 +3,7 @@
 Notable changes to Hellhound. Versions follow semantic versioning; before 1.0 a
 minor version may break compatibility.
 
-## Unreleased (0.3.0)
+## 0.3.0
 
 Sessions now read the claims of the latest verified ID token, and one new call
 bounds how old the claims of a permission check may be. The stored record
