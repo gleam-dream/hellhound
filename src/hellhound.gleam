@@ -902,6 +902,7 @@ pub fn begin_login(
       verifier:,
       redirect_uri:,
       browser_hash: secure.sha256_hex(binding),
+      scopes:,
       max_age: option.map(options.max_age, whole_seconds),
       created_at: now,
       expires_at: now + lifetime,
@@ -1765,7 +1766,13 @@ fn install(
       expires_at: option.map(response.expires_in, fn(s) { now + s }),
       refresh_token: response.refresh_token,
       id_token: option.map(response.id_token, fn(t) { t.token }),
-      scopes: response.scopes,
+      // RFC 6749 §5.1: `scope` is optional in the response "if identical to
+      // the scope requested by the client", so an absent scope means the
+      // requested one, not no scope.
+      scopes: case response.scopes {
+        [] -> material.scopes
+        stated -> stated
+      },
     )
   let command =
     custody.Install(
@@ -2135,6 +2142,8 @@ pub type Access {
     token: AccessToken,
     /// When the provider stated a lifetime.
     expires_at: Option(Timestamp),
+    /// The granted scopes: those the provider stated, or the scopes the
+    /// login requested when its token response stated none (RFC 6749 §5.1).
     scopes: List(String),
   )
 }
