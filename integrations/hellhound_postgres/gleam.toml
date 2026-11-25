@@ -12,9 +12,9 @@ gleam_erlang = ">= 1.3.0 and < 2.0.0"
 gleam_time = ">= 1.11.0 and < 2.0.0"
 exception = ">= 2.1.1 and < 3.0.0"
 pog = ">= 4.1.0 and < 4.2.0"
-hellhound = ">= 0.3.0 and < 0.4.0"
-http_gun = ">= 0.1.0 and < 0.3.0"
-sinal = ">= 0.1.0 and < 0.2.0"
+hellhound = { path = "../.." }
+http_gun = { git = "https://github.com/gleam-dream/http_gun.git", ref = "0d6558c9ede95fab9a6bbf287ecd363e05b0fbcb" }
+sinal = { git = "https://github.com/gleam-dream/sinal.git", ref = "29ea7a90bf820b3c91eb3f76e824abe0d034d78f" }
 
 [dev-dependencies]
 gleam_crypto = ">= 1.6.0 and < 2.0.0"

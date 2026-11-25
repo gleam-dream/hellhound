@@ -40,9 +40,10 @@ let records = hellhound_postgres.records(isolated)
 ```
 <!-- prettier-ignore-end -->
 
-The login integration test supplies the resulting store to Hellhound. Its fixture
-provides `db` and a local issuer `provider`; `key` is the sealing key prepared by
-the test:
+The login integration test supplies the resulting store to Hellhound as its
+custody store; pending logins live in sealed browser cookies and need no store.
+Its fixture provides `db` and a local issuer `provider`; `key` is the sealing key
+prepared by the test:
 
 <!-- prettier-ignore-start -->
 <!-- snips: test/hellhound_postgres_test.gleam#configure-client -->
@@ -51,7 +52,6 @@ let records = hellhound_postgres.records(adapter(db))
 let config =
   testing.config(provider, "https://app.test/callback")
   |> config.with_custody_store(records)
-  |> config.with_transaction_store(records)
   |> config.with_sealing_key(key)
 ```
 <!-- prettier-ignore-end -->
