@@ -1247,7 +1247,7 @@ pub fn issue_access_token(provider: Provider, spec: TokenSpec) -> String {
 /// implementation of the `hellhound/store` contract, for tests and for wrapping
 /// with delays or failures.
 pub fn memory_store() -> Store {
-  let assert Ok(subject) = memory_store.start_linked(None)
+  let assert Ok(subject) = memory_store.start_linked()
   memory_store.store(subject, 5000)
 }
 

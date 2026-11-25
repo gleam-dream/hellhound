@@ -124,7 +124,7 @@
     #md-table(3, ([*Duration or capacity*], [*Admitted range*], [*Default*],
       [provider request], [1 ms–5 min], [10 s], [startup], [1 ms–10 min], [15 s],
       [store and complete login], [1 ms–10 min each], [5 s / 30 s],
-      [pending lifetime / capacity], [1 s–1 day / 1–10M records], [10 min / 100K],
+      [pending login lifetime], [1 s–1 day], [10 min],
       [session lifetime], [positive idle ≤ absolute ≤ 1 year], [1 h idle / 12 h absolute],
       [clock tolerance], [0–300 s], [5 s], [refresh margin / wait], [0–1 h / 0–1 min], [30 s / 5 s],
       [provider body], [1 KiB–64 MiB], [1 MiB],
@@ -367,7 +367,7 @@
       [stop], [5 s supervisor observation], [Nil on exit or expiry; worker notification can follow supervisor exit],
       [storage sweeping], [60 s cadence], [logical expiry already denies use],
     ))
-    #points([The complete-login deadline bounds effect admission and propagated time budgets. A timed-out store's monitor drain can add up to one second, and synchronous telemetry observer work has no Hellhound timeout; the pending verification records this precise return-latency tension.], [stop neither confirms shutdown on wait expiry nor synchronously joins fetch workers or external adapters. Stop a supervised client through its owning parent or it may restart. Applications retain captured resources until their required completion boundary is known. #adr(11)], [Built-in pending-login capacity counts pending and retained terminal records. FIFO/capacity bookkeeping avoids unnecessary scans while there is room; a full login store returns TooManyPendingLogins. Sessions deliberately have no identity-count cap.])
+    #points([The complete-login deadline bounds effect admission and propagated time budgets. A timed-out store's monitor drain can add up to one second, and synchronous telemetry observer work has no Hellhound timeout; the pending verification records this precise return-latency tension.], [stop neither confirms shutdown on wait expiry nor synchronously joins fetch workers or external adapters. Stop a supervised client through its owning parent or it may restart. Applications retain captured resources until their required completion boundary is known. #adr(11)], [Pending logins hold no server capacity: they live in sealed browser cookies. #adr(26) Sessions deliberately have no identity-count cap.])
   ]
 ])
 #section(title: "Failures and caller decisions", lead: "Typed failures preserve phase, authority and effect evidence.", body: [

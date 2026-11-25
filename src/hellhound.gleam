@@ -338,9 +338,7 @@ fn start_tree(
       Some(name) ->
         supervisor.add(
           builder,
-          supervision.worker(fn() {
-            memory_store.start(name, None, settings.clock)
-          }),
+          supervision.worker(fn() { memory_store.start(name, settings.clock) }),
         )
     }
   }
