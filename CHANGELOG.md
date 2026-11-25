@@ -3,6 +3,18 @@
 Notable changes to Hellhound. Versions follow semantic versioning; before 1.0 a
 minor version may break compatibility.
 
+## Unreleased
+
+### Fixed
+
+- The renewal circuit takes a probe as lost only after the renewal can no
+  longer be running. Its lease left out the store calls, including a
+  reservation's retries after conflicts, so a slow store let a second probe
+  start beside the first.
+- A renewal report applies only to the provider-cache incarnation that
+  admitted it. A report sent across a cache restart could open the new
+  circuit, or close it while its probe was in flight.
+
 ## 0.3.0
 
 Sessions now read the claims of the latest verified ID token, and one new call

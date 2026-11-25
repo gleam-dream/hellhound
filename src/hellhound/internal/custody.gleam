@@ -41,6 +41,12 @@ const kind = "hellhound.session.v1"
 /// How many compare-and-set conflicts a transition retries.
 const attempts = 8
 
+/// The most store calls one transition makes: a read and a write for each
+/// attempt.
+pub fn transition_store_calls() -> Int {
+  attempts * 2
+}
+
 pub type Tokens {
   Tokens(
     access_token: String,
