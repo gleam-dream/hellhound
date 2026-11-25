@@ -14,6 +14,12 @@
 //// blocks after HTTP completes. Results and timers address the process, not
 //// its restart-stable name. Worker loss retains the last accepted snapshot;
 //// discovery retry and reload keep their existing bounded cadence.
+////
+//// Readers do not message the actor. Each incarnation publishes its
+//// accepted snapshot, with its own pid, as a `persistent_term`, and a reader
+//// takes it without a copy. A published snapshot counts only while the pid
+//// that published it still holds the cache's name, so a snapshot outlives
+//// neither its incarnation nor a restart.
 
 import gleam/bit_array
 import gleam/dict
@@ -332,7 +338,6 @@ fn metadata_decoder() -> decode.Decoder(#(Metadata, String)) {
 // Cache actor
 
 pub opaque type Message {
-  Get(reply: Subject(Option(Snapshot)))
   FirstDiscovery(reply: Subject(Result(Metadata, Failure)))
   RefreshKeys(reply: Subject(Option(Snapshot)))
   Discover
@@ -397,6 +402,8 @@ type InitialDiscovery {
 
 type State {
   State(
+    /// The restart-stable name readers find the published snapshot by.
+    name: process.Name(Message),
     self: Subject(Message),
     issuer: String,
     policy: transport.Policy,
@@ -450,7 +457,10 @@ pub fn start(
     // Timers and fetch results belong to this incarnation, never its name.
     let self = process.new_subject()
     process.send(self, Discover)
+    // Replace whatever an earlier incarnation published: this one is empty.
+    publish(name, None)
     actor.initialised(State(
+      name:,
       self:,
       issuer:,
       policy:,
@@ -481,6 +491,47 @@ pub fn start(
 fn snapshot(state: State) -> Option(Snapshot) {
   option.map(state.discovered, fn(d) { Snapshot(d.metadata, d.keys) })
 }
+
+/// Set what this incarnation has accepted and publish it for readers.
+/// Every change of `discovered` goes through here, before any reply that
+/// lets a caller expect the new snapshot.
+fn accepted(state: State, discovered: Discovered) -> State {
+  let state = State(..state, discovered: Some(discovered))
+  publish(state.name, snapshot(state))
+  state
+}
+
+// ---------------------------------------------------------------------------
+// Published snapshot
+
+/// The `persistent_term` key of one cache name.
+type PublishedKey {
+  HellhoundProviderSnapshot(process.Name(Message))
+}
+
+/// What one cache incarnation offers to readers.
+type Published {
+  Published(owner: process.Pid, snapshot: Option(Snapshot))
+}
+
+/// Publish the calling incarnation's snapshot. `persistent_term:put` does
+/// nothing when the value is unchanged, so a reload that fetched the same
+/// metadata and keys costs no global garbage collection; a real change
+/// (first discovery, key rotation, restart) does, and those are rare.
+fn publish(name: process.Name(Message), snapshot: Option(Snapshot)) -> Nil {
+  let _ =
+    term_put(
+      HellhoundProviderSnapshot(name),
+      Some(Published(owner: process.self(), snapshot:)),
+    )
+  Nil
+}
+
+@external(erlang, "persistent_term", "put")
+fn term_put(key: PublishedKey, value: Option(Published)) -> Dynamic
+
+@external(erlang, "persistent_term", "get")
+fn term_get(key: PublishedKey, default: Option(Published)) -> Option(Published)
 
 /// Completion and guardian DOWN are ordered signals from the same process.
 /// Matching the active guardian also makes a delayed terminal message inert.
@@ -539,10 +590,6 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
           actor.continue(state)
         }
       }
-    Get(reply) -> {
-      process.send(reply, snapshot(state))
-      actor.continue(state)
-    }
     RenewalAdmission(lease_ms, reply) -> {
       let now = state.now()
       case state.renewals {
@@ -603,25 +650,23 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       case finish_background(state, pid) {
         False -> actor.continue(state)
         True -> {
-          let state =
-            complete_initial(state, result.map(result, fn(d) { d.metadata }))
+          let outcome = result.map(result, fn(d) { d.metadata })
           case result {
             Ok(discovered) ->
               case state.accept(discovered.metadata) {
                 True -> {
+                  // Publish first: a manual start that is told of this
+                  // outcome reads the snapshot at once.
+                  let state =
+                    accepted(state, discovered) |> complete_initial(outcome)
                   process.send_after(state.self, discovered.ttl_ms, Reload)
                   actor.continue(
-                    State(
-                      ..state,
-                      discovered: Some(discovered),
-                      backoff_ms: first_backoff_ms,
-                      fetch: Idle,
-                    ),
+                    State(..state, backoff_ms: first_backoff_ms, fetch: Idle),
                   )
                 }
-                False -> retry_discovery(state)
+                False -> retry_discovery(complete_initial(state, outcome))
               }
-            Error(_) -> retry_discovery(state)
+            Error(_) -> retry_discovery(complete_initial(state, outcome))
           }
         }
       }
@@ -675,7 +720,7 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
         True -> {
           let state = case result, state.discovered {
             Ok(keys), Some(discovered) ->
-              State(..state, discovered: Some(Discovered(..discovered, keys:)))
+              accepted(state, Discovered(..discovered, keys:))
             _, _ -> state
           }
           case state.fetch {
@@ -712,7 +757,7 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
         False -> actor.continue(state)
         True -> {
           let state = case result {
-            Ok(discovered) -> State(..state, discovered: Some(discovered))
+            Ok(discovered) -> accepted(state, discovered)
             Error(_) -> state
           }
           let ttl = case state.discovered {
@@ -758,10 +803,23 @@ fn retry_discovery(state: State) -> actor.Next(State, Message) {
   )
 }
 
+/// The snapshot the running cache incarnation has accepted, read without a
+/// message to it and without a copy. `NotReady` when no cache holds the
+/// name, when it has accepted nothing yet, or when the published snapshot
+/// belongs to an earlier incarnation.
 pub fn snapshot_of(provider: Provider) -> Result(Snapshot, Failure) {
-  case call.call(provider.subject, provider.timeout, Get) {
-    Ok(Some(snapshot)) -> Ok(snapshot)
-    _ -> Error(protocol.NotReady)
+  case process.subject_name(provider.subject) {
+    Error(Nil) -> Error(protocol.NotReady)
+    Ok(name) ->
+      case
+        term_get(HellhoundProviderSnapshot(name), None),
+        process.named(name)
+      {
+        Some(Published(owner:, snapshot: Some(snapshot))), Ok(pid)
+          if pid == owner
+        -> Ok(snapshot)
+        _, _ -> Error(protocol.NotReady)
+      }
   }
 }
 
