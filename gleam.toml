@@ -21,8 +21,8 @@ gleam_time = ">= 1.11.0 and < 2.0.0"
 # on (the design's dependency-provenance section); a newer resolved version must pass the suites.
 gose = ">= 2.2.0 and < 3.0.0"
 kryptos = ">= 1.5.0 and < 2.0.0"
-sinal = { git = "https://github.com/gleam-dream/sinal.git", ref = "29ea7a90bf820b3c91eb3f76e824abe0d034d78f" }
-http_gun = { git = "https://github.com/gleam-dream/http_gun.git", ref = "0d6558c9ede95fab9a6bbf287ecd363e05b0fbcb" }
+sinal = { git = "https://github.com/gleam-dream/sinal.git", ref = "02d386e070c6a99900225c613e8d273f3bebe3c2" }
+http_gun = { git = "https://github.com/gleam-dream/http_gun.git", ref = "0a1e5b9c8db5d40b2277df3fd76d89e9563fe84c" }
 gleam_http = ">= 4.4.0 and < 5.0.0"
 # File work and the exclusive lock of the test provider's kept trust anchor.
 simplifile = ">= 2.7.0 and < 3.0.0"
