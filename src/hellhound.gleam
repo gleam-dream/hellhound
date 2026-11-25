@@ -743,7 +743,6 @@ pub opaque type LoginRedirect {
     url: Redacted(String),
     cookie_name: String,
     cookie_value: Redacted(String),
-    path: String,
     same_site: cookie.SameSitePolicy,
     max_age: Int,
   )
@@ -759,10 +758,12 @@ pub fn login_url(redirect: LoginRedirect) -> String {
 ///
 /// The login cookie holds the pending login (state, nonce, PKCE verifier,
 /// redirect URI, issuer, client id and expiry) sealed with the client's
-/// sealing key. It is named `__Secure-hellhound_login_` followed by a digest
-/// of the state, so each login has its own cookie, and is `Secure`,
-/// `HttpOnly`, `SameSite=Lax` (`None` for form-post callbacks), scoped to the
-/// path of the login's redirect URI and kept for the login lifetime.
+/// sealing key. It is named `__Host-hellhound_login_` followed by a digest
+/// of the state, so each login has its own cookie. The `__Host-` prefix makes
+/// the browser accept it only as `Secure`, `Path=/` and without `Domain`, so
+/// a sibling subdomain cannot plant one. It is also `HttpOnly`,
+/// `SameSite=Lax` (`None` for form-post callbacks) and kept for the login
+/// lifetime.
 pub fn login_response(
   response: Response(b),
   redirect: LoginRedirect,
@@ -773,20 +774,20 @@ pub fn login_response(
   |> response.set_cookie(
     redirect.cookie_name,
     redacted.reveal(redirect.cookie_value),
-    login_cookie_attributes(redirect.path, redirect.same_site, redirect.max_age),
+    login_cookie_attributes(redirect.same_site, redirect.max_age),
   )
   |> fn(r) { response.Response(..r, status: 303) }
 }
 
+/// `__Host-` cookie attributes: `Secure`, `Path=/` and no `Domain`.
 fn login_cookie_attributes(
-  path: String,
   same_site: cookie.SameSitePolicy,
   max_age: Int,
 ) -> cookie.Attributes {
   cookie.Attributes(
     max_age: Some(max_age),
     domain: None,
-    path: Some(path),
+    path: Some("/"),
     secure: True,
     http_only: True,
     same_site: Some(same_site),
@@ -901,7 +902,6 @@ pub fn begin_login(
     url: redacted.new(url),
     cookie_name: login.cookie_name(state),
     cookie_value: redacted.new(login.seal(client.custody.keys, material)),
-    path: login.cookie_path(redirect_uri),
     same_site: same_site(client.settings),
     max_age: lifetime,
   ))
@@ -1363,22 +1363,12 @@ pub fn callback_response(
 ) -> Response(b) {
   case parse_callback(client, request) {
     Error(_) -> response
-    Ok(parsed) -> {
-      let name = login.cookie_name(callback_state(parsed))
-      let settings = client.settings
-      // The cookie was scoped to the path of the login's redirect URI,
-      // which is one of these.
-      [settings.redirect_uri, ..settings.allowed_redirect_uris]
-      |> list.map(login.cookie_path)
-      |> list.unique
-      |> list.fold(response, fn(response, path) {
-        response.expire_cookie(
-          response,
-          name,
-          login_cookie_attributes(path, same_site(settings), 0),
-        )
-      })
-    }
+    Ok(parsed) ->
+      response.expire_cookie(
+        response,
+        login.cookie_name(callback_state(parsed)),
+        login_cookie_attributes(same_site(client.settings), 0),
+      )
   }
 }
 

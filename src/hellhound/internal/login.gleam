@@ -18,13 +18,12 @@ import gleam/json
 import gleam/option.{type Option}
 import gleam/result
 import gleam/string
-import gleam/uri
 import hellhound/internal/sealed.{type Keys}
 import hellhound/internal/secure
 
 const kind = "hellhound.login.v2"
 
-const cookie_prefix = "__Secure-hellhound_login_"
+const cookie_prefix = "__Host-hellhound_login_"
 
 /// Immutable material for one login. Secret-bearing; it leaves Hellhound
 /// only sealed.
@@ -45,14 +44,6 @@ pub type Material {
 /// bits of its digest.
 pub fn cookie_name(state: String) -> String {
   cookie_prefix <> string.slice(secure.sha256_hex(state), 0, 16)
-}
-
-/// The cookie path for a callback at `redirect_uri`: its path, or `/`.
-pub fn cookie_path(redirect_uri: String) -> String {
-  case uri.parse(redirect_uri) {
-    Ok(uri.Uri(path: "", ..)) | Error(Nil) -> "/"
-    Ok(uri.Uri(path:, ..)) -> path
-  }
 }
 
 /// The sealed material as a cookie value (base64url, no padding).

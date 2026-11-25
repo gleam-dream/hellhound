@@ -65,7 +65,7 @@ test("query login shows verified identity and custom claim", async ({
   assert.ok(issuer === ISSUER, `issuer ${issuer}`);
   const cookies = await context.cookies();
   const pending = cookies.filter((c) =>
-    c.name.startsWith("__Secure-hellhound_login_"),
+    c.name.startsWith("__Host-hellhound_login_"),
   );
   const session = cookies.find((c) => c.name === "__Host-hellhound_session");
   // The callback response expired the login cookie.
@@ -232,7 +232,7 @@ test("form_post login completes and clears the login cookie", async ({
   // The cross-site POST carried the SameSite=None login cookie, and the
   // callback response expired it.
   const pending = (await context.cookies()).filter((c) =>
-    c.name.startsWith("__Secure-hellhound_login_"),
+    c.name.startsWith("__Host-hellhound_login_"),
   );
   assert.ok(pending.length === 0, `login cookies ${JSON.stringify(pending)}`);
   assert.ok(
