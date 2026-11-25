@@ -443,16 +443,37 @@ pub fn a_rate_limited_refresh_returns_only_an_unexpired_token_test() {
   let assert Ok(access) = hellhound.access_token(client, session)
   assert hellhound.access_token_value(access.token)
     == hellhound.access_token_value(held.token)
-  // The refusal arrives after the token expired while the refresh ran.
-  script(support.DelayStatus(300, 429, "slow_down"))
+  // The refusal arrives after the token expired while the refresh ran. The
+  // provider holds its answer; the clock moves only once the request has
+  // reached it, so the token was usable when the refresh started.
+  script(support.DelayStatus(2000, 429, "slow_down"))
+  let requests = support.token_requests(provider)
+  let result = process.new_subject()
   process.spawn(fn() {
-    process.sleep(100)
-    support.clock_set(clock, expires_at + 1)
+    process.send(result, hellhound.access_token(client, session))
   })
-  assert hellhound.access_token(client, session)
-    == Error(hellhound.RefreshRateLimited)
+  wait_for_requests(provider, requests + 1, 200)
+  support.clock_set(clock, expires_at + 1)
+  assert process.receive(result, 10_000)
+    == Ok(Error(hellhound.RefreshRateLimited))
   hellhound.stop(client)
   support.provider_stop(provider)
+}
+
+/// Wait, in 10 ms steps, until the provider has seen `count` token requests.
+fn wait_for_requests(
+  provider: support.Provider,
+  count: Int,
+  steps: Int,
+) -> Nil {
+  case support.token_requests(provider) >= count, steps {
+    True, _ -> Nil
+    False, 0 -> panic as "the request never reached the provider"
+    False, _ -> {
+      process.sleep(10)
+      wait_for_requests(provider, count, steps - 1)
+    }
+  }
 }
 
 pub fn logout_removes_custody_then_redirects_test() {
