@@ -132,6 +132,9 @@ pub type Behaviour {
   IdToken(String)
   OmitIdToken
   DropRefreshToken
+  /// Leave `scope` out of the token response (RFC 6749 §5.1 allows it when
+  /// the granted scope is the requested one).
+  OmitScope
   Sub(String)
   /// Replace a string member of the token response.
   TokenField(String, String)

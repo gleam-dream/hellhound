@@ -232,6 +232,7 @@ tokens(Table, {Nonce, AuthTime} = Grant, Opts) ->
         case Behaviour of
             omit_id_token -> maps:remove(<<"id_token">>, Body0);
             drop_refresh_token -> maps:remove(<<"refresh_token">>, Body0);
+            omit_scope -> maps:remove(<<"scope">>, Body0);
             {token_field, Name, Value} -> Body0#{Name => Value};
             {token_int_field, Name, Value} -> Body0#{Name => Value};
             _ -> Body0

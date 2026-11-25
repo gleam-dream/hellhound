@@ -7,12 +7,15 @@ import gleam/dynamic/decode
 import gleam/erlang/process
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/set
 import gleam/string
 import gleam/time/duration
 import gleam/time/timestamp
 import hellhound
 import hellhound/config
-import hellhound_login_test.{browser, logged_in, settings, start, with_clock}
+import hellhound_login_test.{
+  authorize, browser, logged_in, param, settings, start, with_clock,
+}
 import hellhound_store_support as faults
 import hellhound_test_support as support
 
@@ -601,6 +604,50 @@ pub fn refresh_without_id_token_test() {
   assert hellhound.identity_key(hellhound.session_identity(refreshed.session))
     == hellhound.identity_key(hellhound.session_identity(session))
   let assert Ok(_) = hellhound.refresh(client, refreshed.session)
+  hellhound.stop(client)
+  support.provider_stop(provider)
+}
+
+/// RFC 6749 §5.1: a token response may omit `scope` when the granted scope
+/// is the requested one. Such a session holds the requested scopes, so a
+/// refresh response that states the same scope is no scope change.
+pub fn scope_omitted_at_code_exchange_is_the_requested_scope_test() {
+  let provider = support.provider_start(support.Standard)
+  // With `openid`, the scope this provider states on every refresh.
+  let client =
+    start(settings(provider) |> config.with_scopes(["profile", "email"]))
+  let assert Ok(redirect) =
+    hellhound.begin_login(client, browser(), hellhound.default_login())
+  let code = "code-" <> param(hellhound.login_url(redirect), "state")
+  let request = authorize(provider, redirect, code)
+  support.script(provider, support.Code(code), support.OmitScope)
+  let assert Ok(session) = hellhound.complete_login(client, request)
+  let assert Ok(refreshed) = hellhound.refresh(client, session)
+  assert set.from_list(refreshed.scopes)
+    == set.from_list(["openid", "profile", "email"])
+  // The session is still usable: nothing was quarantined.
+  let assert Ok(_) = hellhound.refresh(client, refreshed.session)
+  hellhound.stop(client)
+  support.provider_stop(provider)
+}
+
+/// Before any refresh, the scopes of such a session are the requested ones.
+pub fn scope_omitted_at_code_exchange_reads_as_requested_test() {
+  let provider = support.provider_start(support.Standard)
+  let client =
+    start(settings(provider) |> config.with_scopes(["profile", "email"]))
+  let assert Ok(redirect) =
+    hellhound.begin_login(
+      client,
+      browser(),
+      hellhound.LoginOptions(..hellhound.default_login(), scopes: ["offline"]),
+    )
+  let code = "code-" <> param(hellhound.login_url(redirect), "state")
+  let request = authorize(provider, redirect, code)
+  support.script(provider, support.Code(code), support.OmitScope)
+  let assert Ok(session) = hellhound.complete_login(client, request)
+  let assert Ok(access) = hellhound.access_token(client, session)
+  assert access.scopes == ["openid", "profile", "email", "offline"]
   hellhound.stop(client)
   support.provider_stop(provider)
 }

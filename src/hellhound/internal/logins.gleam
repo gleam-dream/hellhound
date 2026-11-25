@@ -28,6 +28,10 @@ pub type Material {
     verifier: String,
     redirect_uri: String,
     browser_hash: String,
+    /// The scopes the authorization request asked for. A token response
+    /// that omits `scope` grants exactly these (RFC 6749 §5.1). Empty for a
+    /// record written before this field existed.
+    scopes: List(String),
     max_age: Option(Int),
     created_at: Int,
     expires_at: Int,
@@ -164,6 +168,7 @@ fn seal(logins: Logins, key: String, version: Int, value: Stored) -> BitArray {
         #("verifier", json.string(m.verifier)),
         #("redirect_uri", json.string(m.redirect_uri)),
         #("browser_hash", json.string(m.browser_hash)),
+        #("scopes", json.array(m.scopes, json.string)),
         #("max_age", json.nullable(m.max_age, json.int)),
         #("created_at", json.int(m.created_at)),
         #("expires_at", json.int(m.expires_at)),
@@ -202,6 +207,11 @@ fn stored_decoder() -> decode.Decoder(Stored) {
     use verifier <- decode.field("verifier", decode.string)
     use redirect_uri <- decode.field("redirect_uri", decode.string)
     use browser_hash <- decode.field("browser_hash", decode.string)
+    use scopes <- decode.optional_field(
+      "scopes",
+      [],
+      decode.list(decode.string),
+    )
     use max_age <- decode.field("max_age", decode.optional(decode.int))
     use created_at <- decode.field("created_at", decode.int)
     use expires_at <- decode.field("expires_at", decode.int)
@@ -212,6 +222,7 @@ fn stored_decoder() -> decode.Decoder(Stored) {
         verifier:,
         redirect_uri:,
         browser_hash:,
+        scopes:,
         max_age:,
         created_at:,
         expires_at:,
