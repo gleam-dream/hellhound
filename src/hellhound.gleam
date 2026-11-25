@@ -252,8 +252,9 @@ pub fn start(client: Client) -> Result(Nil, StartError) {
       // This PID is the tree this call created, never a later name owner.
       // Cleanup cannot extend the startup deadline by stop's five seconds.
       let monitor = process.monitor(pid)
+      // When this process started the tree, it also stops being told of the exit.
       process.unlink(pid)
-      process.send_abnormal_exit(pid, Shutdown)
+      request_shutdown(pid, int.max(0, deadline - secure.monotonic_ms()))
       let _ =
         process.new_selector()
         |> process.select_specific_monitor(monitor, fn(_) { Nil })
@@ -289,7 +290,9 @@ pub fn supervised(client: Client) -> supervision.ChildSpecification(Client) {
 }
 
 /// Request shutdown of the client's processes and wait up to five seconds
-/// for supervisor exit. Returning does not prove shutdown if that wait expires.
+/// for supervisor exit. Any process that holds the client may call it, not
+/// only the one that called `start`; the starting process keeps running.
+/// Returning does not prove shutdown if that wait expires.
 /// Cache exit triggers cancellation of its background fetch independently
 /// of the provider timeout or a blocked telemetry handler; this call does
 /// not synchronously join the worker.
@@ -300,20 +303,41 @@ pub fn stop(client: Client) -> Nil {
     Error(Nil) -> Nil
     Ok(pid) -> {
       let monitor = process.monitor(pid)
+      // When this process started the tree, it also stops being told of the exit.
       process.unlink(pid)
-      process.send_abnormal_exit(pid, Shutdown)
+      request_shutdown(pid, 5000)
       let _ =
         process.new_selector()
         |> process.select_specific_monitor(monitor, fn(_) { Nil })
         |> process.selector_receive(5000)
+      process.demonitor_process(monitor)
       Nil
     }
   }
 }
 
-type ExitReason {
-  Shutdown
+/// Ask the client supervisor `pid` to shut its children down and exit.
+///
+/// A supervisor obeys an exit signal only from its parent, so a signal from
+/// any other process would be ignored. The system `terminate` request is
+/// honoured from every caller. Reason `normal` still shuts every child down,
+/// and it leaves the process that started the tree, which is linked to it,
+/// running.
+///
+/// `sys:terminate` exits its caller when the supervisor is already gone or
+/// does not answer within `timeout_ms`, so an unlinked helper makes the
+/// request and the caller observes the supervisor through its own monitor.
+fn request_shutdown(pid: process.Pid, timeout_ms: Int) -> Nil {
+  process.spawn_unlinked(fn() { sys_terminate(pid, Normal, timeout_ms) })
+  Nil
 }
+
+type ExitReason {
+  Normal
+}
+
+@external(erlang, "sys", "terminate")
+fn sys_terminate(pid: process.Pid, reason: ExitReason, timeout_ms: Int) -> Nil
 
 /// A view of the client whose events and provider requests carry
 /// `correlation` (`hellhound/telemetry`, HTTP Gun's events). Pure: the

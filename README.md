@@ -328,6 +328,7 @@ an application session or permission grant.
 Use the [supervision example](consumer/src/hellhound_reference/usage/supervision.gleam)
 for a long-lived service. Stop supervised clients through their parent; manually
 started clients need `hellhound.stop` after the application stops admitting work.
+Any process that holds the client can call it.
 
 ## Resource servers
 
