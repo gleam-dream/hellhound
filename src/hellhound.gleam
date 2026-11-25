@@ -2243,7 +2243,13 @@ pub fn access_token(
         // A refresh that decided nothing (not sent, store or wait timeout)
         // leaves the current token in use while it has not expired.
         Error(error) ->
-          case usable && session_error_action(error) == RetryLater {
+          // Checked again with the clock as it is now: the token may have
+          // expired while the refresh ran.
+          case
+            usable
+            && expires_at > client.settings.clock()
+            && session_error_action(error) == RetryLater
+          {
             True -> access_of(client, snapshot)
             False -> Error(error)
           }
@@ -2350,7 +2356,7 @@ pub fn current_issued_at(current: Current) -> Timestamp {
 /// | `RetryLater` | Deny this request; keep the session. | not-sent failures, `RefreshRateLimited`, `RefreshNotSent(RenewalPaused)`, store and wait timeouts |
 /// | `Reauthenticate` | Call `logout`, then send the user to sign in. | a quarantined or revoked refresh token, no refresh token, no live session |
 /// | `FixConfiguration` | An operator must act; keep the session. | `ClaimsNotRenewed`, a stored session that did not open, a foreign session |
-/// | `Recover` | Call `recover_refresh`, then `current_identity` again. | `RefreshUnconfirmed` |
+/// | `Recover` | Call `recover_refresh`, then `current_identity` again, which renews once more if the recovered refresh carried no ID token. | `RefreshUnconfirmed` |
 ///
 /// Calling `logout` on `Reauthenticate` ends a session that cannot be used
 /// again. On `FixConfiguration` the session is kept: `ClaimsNotRenewed`

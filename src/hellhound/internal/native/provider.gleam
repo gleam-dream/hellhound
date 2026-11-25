@@ -350,8 +350,9 @@ pub type Admission {
   /// The circuit is closed.
   Admitted
   /// The window ended: this renewal is the one probe. Its report closes the
-  /// circuit or opens it again.
-  Probe
+  /// circuit or opens it again. `number` tells it from a probe that was
+  /// taken as lost and replaced.
+  Probe(number: Int)
   /// The circuit is open, or its probe is in flight. Nothing is sent.
   Paused
 }
@@ -374,9 +375,9 @@ type Circuit {
   /// No claims renewal starts before `until` (monotonic milliseconds). The
   /// first one after it is the probe.
   Open(until: Int)
-  /// One probe is in flight. If it has not reported by `until`, it is taken
-  /// as lost and the next renewal becomes the probe.
-  Probing(until: Int)
+  /// Probe `number` is in flight. If it has not reported by `until`, it is
+  /// taken as lost and the next renewal becomes the probe.
+  Probing(until: Int, number: Int)
 }
 
 /// Network fetches run in a separate process, one at a time, so the actor
@@ -407,6 +408,8 @@ type State {
     /// Monotonic milliseconds when the last unknown-key refresh started.
     last_key_refresh: Option(Int),
     renewals: Circuit,
+    /// Probes admitted by this incarnation; the next probe's number.
+    probes: Int,
     /// Monotonic milliseconds; a test seam.
     now: fn() -> Int,
     fetch: Fetch,
@@ -457,6 +460,7 @@ pub fn start(
       backoff_ms: first_backoff_ms,
       last_key_refresh: None,
       renewals: Closed,
+      probes: 0,
       now:,
       fetch: Idle,
     ))
@@ -546,14 +550,21 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
           process.send(reply, Admitted)
           actor.continue(state)
         }
-        Open(until) | Probing(until) if until > now -> {
+        Open(until) | Probing(until:, ..) if until > now -> {
           process.send(reply, Paused)
           actor.continue(state)
         }
         // The window ended, or the probe never reported: one probe.
-        Open(_) | Probing(_) -> {
-          process.send(reply, Probe)
-          actor.continue(State(..state, renewals: Probing(now + lease_ms)))
+        Open(_) | Probing(..) -> {
+          let number = state.probes + 1
+          process.send(reply, Probe(number))
+          actor.continue(
+            State(
+              ..state,
+              probes: number,
+              renewals: Probing(until: now + lease_ms, number:),
+            ),
+          )
         }
       }
     }
@@ -561,9 +572,15 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       actor.continue(
         State(..state, renewals: case verdict, admission, state.renewals {
           Faulted, _, _ -> Open(state.now() + renewal_pause_ms)
-          Answered, Probe, Probing(_) -> Closed
+          // Only the probe that holds the circuit closes or releases it: a
+          // late report from a probe that was replaced changes nothing.
+          Answered, Probe(reported), Probing(number:, ..)
+            if reported == number
+          -> Closed
           // The probe sent nothing: the next renewal probes in its place.
-          NothingLearned, Probe, Probing(_) -> Open(state.now())
+          NothingLearned, Probe(reported), Probing(number:, ..)
+            if reported == number
+          -> Open(state.now())
           _, _, renewals -> renewals
         }),
       )
