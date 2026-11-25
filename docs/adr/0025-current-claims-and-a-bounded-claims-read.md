@@ -41,5 +41,5 @@
   - Redirect renewal (`prompt=none`): it skips non-GET requests and breaks XHR.
   - Silently keeping old claims when no ID token returns: it defeats the bound.
   - Idle polling from long-lived connections: it defeats the idle timeout.
-- **Unresolved:** renewals already in flight when the first fault returns are not bounded. `invalid_scope` after expiry is still retried per request. One `VerifiedIdentity` type reading two claim sets was contested in review and kept, with the three login-pinned accessors documented.
+- **Unresolved:** renewals already in flight when the first fault returns are not bounded. A read that used another request's refresh tells `NotReturned` from `IssuedTooLongAgo` by comparing claims, so a token reissued with identical claims reads as `NotReturned` there; both reasons have the same action, and telling them apart needs the publication recorded in custody for readers that did not dispatch. `invalid_scope` after expiry is still retried per request. One `VerifiedIdentity` type reading two claim sets was contested in review and kept, with the three login-pinned accessors documented.
 - **Provenance:** the accepted concept brief for Hellhound 0.3.0 (2026-11-24) and its five review rounds; retained bounded-read, replacement, circuit and test-provider tests, and the reference consumer's permission check.

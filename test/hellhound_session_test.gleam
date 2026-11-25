@@ -420,6 +420,41 @@ pub fn introspection_checks_exp_strictly_test() {
   support.provider_stop(provider)
 }
 
+/// A 429 keeps the session, so `access_token` may fall back to the current
+/// token. It does so only while that token has not expired, judged when the
+/// refusal arrives and not when the refresh started.
+pub fn a_rate_limited_refresh_returns_only_an_unexpired_token_test() {
+  let provider = support.provider_start(support.Standard)
+  let clock = support.clock_new(support.now_seconds())
+  let client = start(settings(provider) |> with_clock(clock))
+  let session = logged_in(provider, client)
+  let assert Ok(hellhound.Access(expires_at: Some(expires_at), ..) as held) =
+    hellhound.access_token(client, session)
+  let #(expires_at, _) = timestamp.to_unix_seconds_and_nanoseconds(expires_at)
+  let script = fn(behaviour) {
+    list.each(support.refresh_tokens(provider), fn(token) {
+      support.script(provider, support.Refresh(token), behaviour)
+    })
+  }
+  // Inside the refresh margin, two seconds before expiry. The refusal
+  // arrives before the token expires: the current token is returned.
+  support.clock_set(clock, expires_at - 2)
+  script(support.Status(429, "slow_down"))
+  let assert Ok(access) = hellhound.access_token(client, session)
+  assert hellhound.access_token_value(access.token)
+    == hellhound.access_token_value(held.token)
+  // The refusal arrives after the token expired while the refresh ran.
+  script(support.DelayStatus(300, 429, "slow_down"))
+  process.spawn(fn() {
+    process.sleep(100)
+    support.clock_set(clock, expires_at + 1)
+  })
+  assert hellhound.access_token(client, session)
+    == Error(hellhound.RefreshRateLimited)
+  hellhound.stop(client)
+  support.provider_stop(provider)
+}
+
 pub fn logout_removes_custody_then_redirects_test() {
   let provider = support.provider_start(support.Standard)
   let client = start(settings(provider))

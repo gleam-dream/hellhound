@@ -125,6 +125,8 @@ pub type ScriptKey {
 pub type Behaviour {
   Delay(Int)
   Status(Int, String)
+  /// The status and error, answered after this many milliseconds.
+  DelayStatus(Int, Int, String)
   Close
   MalformedJson
   IdToken(String)

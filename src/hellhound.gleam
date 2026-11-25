@@ -2379,10 +2379,10 @@ pub fn current_issued_at(current: Current) -> Timestamp {
 /// The bound limits the age of the last ID token the provider issued. A
 /// role removed at the provider is denied within the bound only if the
 /// provider evaluates claims again on refresh; check that for your provider.
-/// The session needs a refresh token. The call takes at most the refresh
-/// wait plus the request timeout, plus the store timeout for each of its
-/// custody calls: the read, the reservation, and the settlement or
-/// publication. To renew regardless of age, call
+/// The session needs a refresh token. The call has no single time limit:
+/// each step has its own, which are the refresh wait, the request timeout,
+/// and the store timeout on every custody call (the reservation makes
+/// several when it retries a conflict). To renew regardless of age, call
 /// `refresh` with a session read in this request.
 pub fn current_identity(
   client: Client,

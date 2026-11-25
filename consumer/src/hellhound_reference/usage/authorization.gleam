@@ -35,6 +35,10 @@ pub type Decision {
   Denied
   /// Nothing was decided: deny this request and keep the session.
   TryAgainLater
+  /// Refreshed tokens are still not confirmed in custody: deny this request,
+  /// keep the value, and pass it to `hellhound.recover_refresh` again. It is
+  /// the only copy of those tokens.
+  Recovering(hellhound.RefreshRecovery)
   /// The session was ended: send the person to sign in.
   SignInAgain
   /// An operator must act: deny, keep the session, and alert.
@@ -86,10 +90,13 @@ fn denied(
     // quarantined, or it is gone): end it before redirecting.
     hellhound.Reauthenticate, _ ->
       case hellhound.logout(client, session, hellhound.default_logout()) {
+        // Only these two say the session is gone.
+        Ok(_) | Error(hellhound.LogoutSession(hellhound.SessionNotFound)) ->
+          SignInAgain
         // Custody did not confirm the removal, so the session may still
         // exist: the next request ends it.
         Error(hellhound.LogoutStoreUnavailable) -> TryAgainLater
-        _ -> SignInAgain
+        Error(_) -> Misconfigured
       }
     // The provider returns no ID token on refresh, so no refresh can renew
     // the claims. This is the application's choice. Denying keeps the
@@ -105,8 +112,8 @@ fn denied(
 
 /// Until custody confirms the publication, the refreshed tokens exist only
 /// in the recovery value. Each unconfirmed attempt returns the value to pass
-/// to the next one. A request cannot hold it for ever, so this stops after a
-/// few attempts; an application that can keep the value longer should.
+/// to the next one. A request cannot wait for ever, so after a few attempts
+/// the value is handed to the caller, which keeps it and tries again.
 fn recover(
   client: hellhound.Client,
   recovery: hellhound.RefreshRecovery,
@@ -115,6 +122,7 @@ fn recover(
   case hellhound.recover_refresh(client, recovery) {
     Error(hellhound.RefreshUnconfirmed(next)) if attempts > 1 ->
       recover(client, next, attempts - 1)
+    Error(hellhound.RefreshUnconfirmed(next)) -> Recovering(next)
     _ -> TryAgainLater
   }
 }
