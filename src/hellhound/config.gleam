@@ -672,7 +672,7 @@ pub fn validate(config: Config) -> Result(Nil, List(ConfigError)) {
 }
 
 /// The login cookie seals the issuer, client id and redirect URI with about
-/// 400 bytes of fixed material and grows by a third in base64url; 2 KiB of
+/// 250 bytes of fixed material and grows by a third in base64url; 2 KiB of
 /// variable text keeps it under the 4 KiB a browser keeps per cookie.
 fn login_cookie_fits(config: Config) -> Bool {
   let longest =
