@@ -341,6 +341,43 @@ pub opaque type Message {
   Reloaded(process.Pid, Result(Discovered, Failure))
   Discovery(process.Pid, Result(Discovered, Failure))
   FetchExited(process.Down)
+  RenewalAdmission(lease_ms: Int, reply: Subject(Admission))
+  RenewalReported(admission: Admission, verdict: Verdict)
+}
+
+/// The answer to a claims renewal that asks to start.
+pub type Admission {
+  /// The circuit is closed.
+  Admitted
+  /// The window ended: this renewal is the one probe. Its report closes the
+  /// circuit or opens it again. `number` tells it from a probe that was
+  /// taken as lost and replaced.
+  Probe(number: Int)
+  /// The circuit is open, or its probe is in flight. Nothing is sent.
+  Paused
+}
+
+/// What an admitted claims renewal learned about the provider.
+pub type Verdict {
+  /// The provider answered the refresh with something this node could act
+  /// on.
+  Answered
+  /// The provider is not serving claims renewals: its outcome was unknown,
+  /// it rate-limited, or the ID token it returned cannot satisfy the bound.
+  Faulted
+  /// The provider was not reached, or another request's refresh was used.
+  NothingLearned
+}
+
+/// The renewal circuit of one cache incarnation.
+type Circuit {
+  Closed
+  /// No claims renewal starts before `until` (monotonic milliseconds). The
+  /// first one after it is the probe.
+  Open(until: Int)
+  /// Probe `number` is in flight. If it has not reported by `until`, it is
+  /// taken as lost and the next renewal becomes the probe.
+  Probing(until: Int, number: Int)
 }
 
 /// Network fetches run in a separate process, one at a time, so the actor
@@ -370,6 +407,9 @@ type State {
     backoff_ms: Int,
     /// Monotonic milliseconds when the last unknown-key refresh started.
     last_key_refresh: Option(Int),
+    renewals: Circuit,
+    /// Probes admitted by this incarnation; the next probe's number.
+    probes: Int,
     /// Monotonic milliseconds; a test seam.
     now: fn() -> Int,
     fetch: Fetch,
@@ -383,6 +423,10 @@ pub type Provider {
 /// Minimum interval between unknown-key refreshes of one cache incarnation.
 /// The design's defaults table owns this value.
 const key_refresh_cooldown_ms = 30_000
+
+/// How long the renewal circuit stays open after a claims renewal met a
+/// provider fault. The design's defaults table owns this value.
+const renewal_pause_ms = 60_000
 
 /// Delay before retrying a reload that found another fetch in flight.
 const reload_retry_ms = 1000
@@ -415,6 +459,8 @@ pub fn start(
       initial: Pending(None),
       backoff_ms: first_backoff_ms,
       last_key_refresh: None,
+      renewals: Closed,
+      probes: 0,
       now:,
       fetch: Idle,
     ))
@@ -497,6 +543,47 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       process.send(reply, snapshot(state))
       actor.continue(state)
     }
+    RenewalAdmission(lease_ms, reply) -> {
+      let now = state.now()
+      case state.renewals {
+        Closed -> {
+          process.send(reply, Admitted)
+          actor.continue(state)
+        }
+        Open(until) | Probing(until:, ..) if until > now -> {
+          process.send(reply, Paused)
+          actor.continue(state)
+        }
+        // The window ended, or the probe never reported: one probe.
+        Open(_) | Probing(..) -> {
+          let number = state.probes + 1
+          process.send(reply, Probe(number))
+          actor.continue(
+            State(
+              ..state,
+              probes: number,
+              renewals: Probing(until: now + lease_ms, number:),
+            ),
+          )
+        }
+      }
+    }
+    RenewalReported(admission, verdict) ->
+      actor.continue(
+        State(..state, renewals: case verdict, admission, state.renewals {
+          Faulted, _, _ -> Open(state.now() + renewal_pause_ms)
+          // Only the probe that holds the circuit closes or releases it: a
+          // late report from a probe that was replaced changes nothing.
+          Answered, Probe(reported), Probing(number:, ..)
+            if reported == number
+          -> Closed
+          // The probe sent nothing: the next renewal probes in its place.
+          NothingLearned, Probe(reported), Probing(number:, ..)
+            if reported == number
+          -> Open(state.now())
+          _, _, renewals -> renewals
+        }),
+      )
     Discover ->
       case state.fetch {
         Idle -> {
@@ -685,6 +772,34 @@ pub fn refresh_keys(provider: Provider) -> Result(Snapshot, Failure) {
     Ok(Some(snapshot)) -> Ok(snapshot)
     _ -> Error(protocol.NotReady)
   }
+}
+
+/// Ask to start a refresh made only to renew claims. `Paused` while the
+/// renewal circuit is open or its probe is in flight. `lease_ms` is how long
+/// a probe may take before it is taken as lost. A cache that is not running
+/// admits the renewal: the refresh then fails as not ready, and nothing is
+/// sent. A cache that is running and did not answer in time may have its
+/// circuit open, so that renewal is paused. Report every admitted renewal
+/// with `renewal_reported`.
+pub fn admit_renewal(provider: Provider, lease_ms: Int) -> Admission {
+  case
+    call.call(provider.subject, provider.timeout, RenewalAdmission(lease_ms, _))
+  {
+    Ok(admission) -> admission
+    Error(call.CalleeDown) -> Admitted
+    Error(call.CallTimedOut) -> Paused
+  }
+}
+
+/// Report how an admitted claims renewal ended. `Faulted` opens the circuit
+/// for `renewal_pause_ms`, whatever its state. A probe that was `Answered`
+/// closes it.
+pub fn renewal_reported(
+  provider: Provider,
+  admission: Admission,
+  verdict: Verdict,
+) -> Nil {
+  process.send(provider.subject, RenewalReported(admission, verdict))
 }
 
 /// The same provider with calls bounded by `timeout` milliseconds.

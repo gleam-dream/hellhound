@@ -11,6 +11,7 @@
 //// | `[hellhound, http, request]` (`http_request`) | an outbound provider request completes or fails |
 //// | `[hellhound, login]` (`login`) | `complete_login` or `recover_custody` returns |
 //// | `[hellhound, refresh]` (`refresh`) | a refresh completes, joins another, or fails |
+//// | `[hellhound, current_identity]` (`current_identity`) | a bounded claims read returns, with or without a refresh |
 //// | `[hellhound, logout]` (`logout`) | `logout` ends a session |
 ////
 //// ```gleam
@@ -282,7 +283,46 @@ pub fn login() -> sinal.Event(SessionMeasurements, Login) {
 
 /// `[hellhound, refresh]` metadata.
 pub type Refresh {
-  Refresh(outcome: RefreshOutcome, correlation: Option(Correlation))
+  Refresh(
+    outcome: RefreshOutcome,
+    /// What this refresh did to the session's current claims.
+    claims: RefreshClaims,
+    /// Why the generation was quarantined; `NotQuarantined` for every other
+    /// outcome.
+    quarantine: RefreshQuarantine,
+    correlation: Option(Correlation),
+  )
+}
+
+/// Why a refresh ended in quarantine. One session's rejected response and a
+/// provider that stopped answering need different responses from an
+/// operator.
+pub type RefreshQuarantine {
+  NotQuarantined
+  /// The request may have reached the provider; its outcome is unknown.
+  QuarantinedOutcomeUnknown
+  /// The provider answered, and the response was not acceptable.
+  QuarantinedResponseRejected
+  /// The refreshing request's lease ran out before it settled.
+  QuarantinedRefresherLost
+}
+
+pub const refresh_quarantines = [
+  NotQuarantined,
+  QuarantinedOutcomeUnknown,
+  QuarantinedResponseRejected,
+  QuarantinedRefresherLost,
+]
+
+/// What a refresh did to the session's current claims. No claim value is
+/// ever recorded.
+pub type RefreshClaims {
+  /// This refresh published a verified ID token; its claims are now the
+  /// session's current claims.
+  Replaced
+  /// Every other case: the response carried no ID token, or this refresh
+  /// published nothing (it failed, was not confirmed, or joined another).
+  NotReturned
 }
 
 pub type RefreshOutcome {
@@ -294,6 +334,8 @@ pub type RefreshOutcome {
   RefreshNotSent
   /// Rejected before grant processing; the generation was released.
   RefreshRejected
+  /// The token endpoint answered 429; the generation was released.
+  RefreshRateLimited
   /// The refresh token is revoked (`invalid_grant`).
   RefreshRevoked
   /// The generation is quarantined after an uncertain outcome.
@@ -311,6 +353,7 @@ pub const refresh_outcomes = [
   RefreshJoined,
   RefreshNotSent,
   RefreshRejected,
+  RefreshRateLimited,
   RefreshRevoked,
   RefreshQuarantined,
   RefreshWaitTimedOut,
@@ -318,7 +361,10 @@ pub const refresh_outcomes = [
   RefreshUnavailable,
 ]
 
-/// The descriptor for `[hellhound, refresh]`; `outcome` is a snake_case binary.
+/// The descriptor for `[hellhound, refresh]`; `outcome` is a snake_case
+/// binary, `claims` is `<<"replaced">>` or `<<"not_returned">>`, and
+/// `quarantine` is `<<"none">>`, `<<"outcome_unknown">>`,
+/// `<<"response_rejected">>` or `<<"refresher_lost">>`.
 pub fn refresh() -> sinal.Event(SessionMeasurements, Refresh) {
   let metadata = {
     use outcome <- fields.include(
@@ -328,6 +374,7 @@ pub fn refresh() -> sinal.Event(SessionMeasurements, Refresh) {
           RefreshJoined -> "joined"
           RefreshNotSent -> "not_sent"
           RefreshRejected -> "rejected"
+          RefreshRateLimited -> "rate_limited"
           RefreshRevoked -> "revoked"
           RefreshQuarantined -> "quarantined"
           RefreshWaitTimedOut -> "wait_timed_out"
@@ -337,12 +384,88 @@ pub fn refresh() -> sinal.Event(SessionMeasurements, Refresh) {
       }),
       get: fn(m) { m.outcome },
     )
+    use claims <- fields.include(
+      fields.enum("claims", [Replaced, NotReturned], fn(c) {
+        case c {
+          Replaced -> "replaced"
+          NotReturned -> "not_returned"
+        }
+      }),
+      get: fn(m) { m.claims },
+    )
+    use quarantine <- fields.include(
+      fields.enum("quarantine", refresh_quarantines, fn(q) {
+        case q {
+          NotQuarantined -> "none"
+          QuarantinedOutcomeUnknown -> "outcome_unknown"
+          QuarantinedResponseRejected -> "response_rejected"
+          QuarantinedRefresherLost -> "refresher_lost"
+        }
+      }),
+      get: fn(m) { m.quarantine },
+    )
     use correlation <- fields.include(correlation.field(), get: fn(m) {
       m.correlation
     })
-    fields.success(Refresh(outcome:, correlation:))
+    fields.success(Refresh(outcome:, claims:, quarantine:, correlation:))
   }
   sinal.event(["hellhound", "refresh"], session_duration(), metadata)
+}
+
+/// `[hellhound, current_identity]` metadata: emitted once for every bounded
+/// claims read that reached custody.
+pub type CurrentIdentity {
+  CurrentIdentity(outcome: ClaimsReadOutcome, correlation: Option(Correlation))
+}
+
+pub type ClaimsReadOutcome {
+  /// The claims were within the bound; the provider was not called.
+  ClaimsWithinBound
+  /// The claims were past the bound and a refresh brought them within it.
+  ClaimsRenewed
+  /// The renewal circuit was open; nothing was sent.
+  ClaimsRenewalPaused
+  /// The refresh returned no ID token. An operator must act.
+  ClaimsNotReturned
+  /// The refreshed ID token was already past the bound. An operator must
+  /// act.
+  ClaimsIssuedTooLongAgo
+  /// The read or its refresh failed; the refresh event has the outcome.
+  ClaimsReadFailed
+}
+
+pub const claims_read_outcomes = [
+  ClaimsWithinBound,
+  ClaimsRenewed,
+  ClaimsRenewalPaused,
+  ClaimsNotReturned,
+  ClaimsIssuedTooLongAgo,
+  ClaimsReadFailed,
+]
+
+/// The descriptor for `[hellhound, current_identity]`; `outcome` is a
+/// snake_case binary.
+pub fn current_identity() -> sinal.Event(SessionMeasurements, CurrentIdentity) {
+  let metadata = {
+    use outcome <- fields.include(
+      fields.enum("outcome", claims_read_outcomes, fn(o) {
+        case o {
+          ClaimsWithinBound -> "within_bound"
+          ClaimsRenewed -> "renewed"
+          ClaimsRenewalPaused -> "paused"
+          ClaimsNotReturned -> "not_returned"
+          ClaimsIssuedTooLongAgo -> "issued_too_long_ago"
+          ClaimsReadFailed -> "failed"
+        }
+      }),
+      get: fn(m) { m.outcome },
+    )
+    use correlation <- fields.include(correlation.field(), get: fn(m) {
+      m.correlation
+    })
+    fields.success(CurrentIdentity(outcome:, correlation:))
+  }
+  sinal.event(["hellhound", "current_identity"], session_duration(), metadata)
 }
 
 /// `[hellhound, logout]` metadata: emitted once custody is removed.

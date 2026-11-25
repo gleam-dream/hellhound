@@ -7,7 +7,8 @@
 //// `testing.authorize` and skip HTTP. The provider also mints and revokes
 //// tokens, skews its clock, rotates its key and counts requests. Per subject,
 //// it scripts granted scopes, email claims and extra ID-token claims such as
-//// a namespaced roles claim, so a test signs in as production does.
+//// a namespaced roles claim, so a test signs in as production does. Refresh
+//// answers are scripted too (`usage/authorization` uses them).
 
 import gleam/dynamic/decode
 import gleam/http/request

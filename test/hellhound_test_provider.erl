@@ -149,6 +149,7 @@ handle(Table, #{path := <<"/token">>, body := Body}) ->
                     case ets:lookup(Table, {script, {refresh, Rt}}) of
                         [{_, drop_refresh_token}] -> ets:insert(Table, {{refresh, Rt}, Grant});
                         [{_, {status, _, _}}] -> ets:insert(Table, {{refresh, Rt}, Grant});
+                        [{_, {delay_status, _, _, _}}] -> ets:insert(Table, {{refresh, Rt}, Grant});
                         _ -> ok
                     end,
                     behave(Table, {refresh, Rt}, Grant);
@@ -188,6 +189,8 @@ behave(Table, Key, Nonce) ->
         [] -> tokens(Table, Nonce, #{});
         [{_, {delay, Ms}}] -> {delay, Ms, tokens(Table, Nonce, #{})};
         [{_, {status, Status, Error}}] -> json(Status, #{<<"error">> => Error, <<"error_description">> => <<"SENTINEL-PROVIDER-DESC">>});
+        [{_, {delay_status, Ms, Status, Error}}] ->
+            {delay, Ms, json(Status, #{<<"error">> => Error, <<"error_description">> => <<"SENTINEL-PROVIDER-DESC">>})};
         [{_, close}] -> close;
         [{_, malformed_json}] -> {respond, 200, [{<<"content-type">>, <<"application/json">>}], <<"{not json">>};
         [{_, Behaviour}] -> tokens(Table, Nonce, #{behaviour => Behaviour})

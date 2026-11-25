@@ -1,7 +1,7 @@
 %% Test support exposed to Gleam tests.
 -module(hellhound_test_support_ffi).
 
--export([mint/3, rsa_jwk/2, jwk_with/3, mailbox_size/0, client_private_jwk/0, adapter_request/2, server_start/2, server_url/2, server_requests/1, server_stop/1, ca_der/0, worker_kill/1, worker_alive/1, atom_count/0, process_count/0, form_login/3, print/1, node_reset/0, node_next/2, node_log/0, keycloak_logout/1, clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
+-export([mint/3, rsa_jwk/2, jwk_with/3, mailbox_size/0, client_private_jwk/0, adapter_request/2, server_start/2, server_url/2, server_requests/1, server_stop/1, ca_der/0, worker_kill/1, worker_alive/1, atom_count/0, process_count/0, form_login/3, print/1, node_reset/0, node_next/2, node_log/0, keycloak_logout/1, fixture_http/5, clock_new/1, clock_set/2, clock_read/1, provider_start/1, kill_named/1, ca_pem/0, keycloak_login/3, authorize/2, visit/1, count_reset/0, count/1, handle/4, pki_file/1, spawn_collect/2]).
 
 ca_pem() ->
     Dir = hellhound_test_server:pki_dir(),
@@ -119,6 +119,20 @@ keycloak_logout(Url) ->
         _ ->
             {error, nil}
     end.
+
+%% One HTTPS request to a local fixture that the test CA signed. The method
+%% is `get`, `post` or `delete`; a request without a body passes `<<>>` for
+%% both the content type and the body.
+fixture_http(Method, Url, Headers, ContentType, Body) ->
+    {ok, _} = application:ensure_all_started([inets, ssl]),
+    Hs = [{binary_to_list(K), binary_to_list(V)} || {K, V} <- Headers],
+    Request = case Body of
+        <<>> -> {binary_to_list(Url), Hs};
+        _ -> {binary_to_list(Url), Hs, binary_to_list(ContentType), Body}
+    end,
+    {ok, {{_, Status, _}, _, Reply}} =
+        httpc:request(Method, Request, [{ssl, node_ssl()}], [{body_format, binary}]),
+    {Status, Reply}.
 
 %% node-oidc-provider control API.
 node_url(Path) -> "https://localhost:19443/__control/" ++ Path.

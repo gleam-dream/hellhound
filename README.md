@@ -46,6 +46,14 @@ integration used below.
 The optional [PostgreSQL adapter](integrations/hellhound_postgres/README.md)
 installs from a Git subdirectory.
 
+### Upgrading to 0.3.0
+
+Version 0.3.0 makes every session read return the claims of the latest verified
+ID token, and adds `hellhound.current_identity` for permission checks. It has
+breaking changes: new `SessionError` and `ProviderFailure` variants and a new
+field on the refresh telemetry event. [CHANGELOG.md](CHANGELOG.md) lists them
+with migration notes.
+
 ### Upgrading from 0.1.0 to 0.2.0
 
 Version 0.2.0 adds standalone JWT assertion signing, PEM private-key loading and
@@ -170,6 +178,136 @@ the reference consumer. Its [common-path test](consumer/test/hellhound_reference
 exercises the equivalent login, token and logout flow against a local test provider.
 The application stores the session reference in its protected browser session.
 
+## Check a permission on current claims
+
+A refresh that returns an ID token replaces the session's claims, so a session
+read shows the roles the provider last issued. `hellhound.session_identity` is
+that read without any check, and is not for authorization. A permission check
+calls `hellhound.current_identity` with a bound the application chooses: it
+returns the claims only when they were issued within the bound, and renews them
+with one shared refresh when they were not.
+
+<!-- prettier-ignore-start -->
+
+<!-- snips: consumer/src/hellhound_reference/usage/authorization.gleam#authorization -->
+```gleam
+/// Built once at startup, from the client it is used with. The bound is the
+/// application's policy; Hellhound has no default. `claims_age` refuses less
+/// than 60 s, and a bound not greater than the client's clock tolerance.
+pub fn role_claims_age(client: hellhound.Client) -> hellhound.ClaimsAge {
+  let assert Ok(age) = hellhound.claims_age(client, duration.minutes(15))
+  age
+}
+
+pub type Decision {
+  Allowed
+  /// The person lacks the role.
+  Denied
+  /// Nothing was decided: deny this request and keep the session.
+  TryAgainLater
+  /// Refreshed tokens are still not confirmed in custody: deny this request,
+  /// keep the value, and pass it to `hellhound.recover_refresh` again. It is
+  /// the only copy of those tokens.
+  Recovering(hellhound.RefreshRecovery)
+  /// The session was ended: send the person to sign in.
+  SignInAgain
+  /// An operator must act: deny, keep the session, and alert.
+  Misconfigured
+}
+
+/// Authorization helpers take a `Current`, never a `VerifiedIdentity`, so
+/// the type shows that the age of the claims was checked. A missing roles
+/// claim means no roles.
+pub fn has_role(current: hellhound.Current, role: String) -> Bool {
+  hellhound.decode_claims(
+    hellhound.current_claims(current),
+    decode.at(["https://example.test/roles"], decode.list(decode.string)),
+  )
+  |> option.from_result
+  |> option.unwrap([])
+  |> list.contains(role)
+}
+
+/// One call per role check, on every protected request.
+pub fn require_role(
+  client: hellhound.Client,
+  session: hellhound.Session,
+  claims_age: hellhound.ClaimsAge,
+  role: String,
+) -> Decision {
+  case hellhound.current_identity(client, session, claims_age) {
+    Ok(current) ->
+      case has_role(current, role) {
+        True -> Allowed
+        False -> Denied
+      }
+    Error(error) -> denied(client, session, error)
+  }
+}
+
+fn denied(
+  client: hellhound.Client,
+  session: hellhound.Session,
+  error: hellhound.SessionError,
+) -> Decision {
+  case hellhound.session_error_action(error), error {
+    // Publication was not confirmed. Recover it, without another provider
+    // call; the next request reads the renewed claims.
+    hellhound.Recover, hellhound.RefreshUnconfirmed(recovery) ->
+      recover(client, recovery, 3)
+    hellhound.Recover, _ | hellhound.RetryLater, _ -> TryAgainLater
+    // The session cannot be used again (its refresh token is revoked or
+    // quarantined, or it is gone): end it before redirecting.
+    hellhound.Reauthenticate, _ ->
+      case hellhound.logout(client, session, hellhound.default_logout()) {
+        // Only these two say the session is gone.
+        Ok(_) | Error(hellhound.LogoutSession(hellhound.SessionNotFound)) ->
+          SignInAgain
+        // Custody did not confirm the removal, so the session may still
+        // exist: the next request ends it.
+        Error(hellhound.LogoutStoreUnavailable) -> TryAgainLater
+        Error(_) -> Misconfigured
+      }
+    // The provider returns no ID token on refresh, so no refresh can renew
+    // the claims. This is the application's choice. Denying keeps the
+    // session and makes the fault visible until an operator fixes the
+    // provider. To send the person to sign in once per bound instead, end
+    // the session here as the `Reauthenticate` branch does.
+    hellhound.FixConfiguration,
+      hellhound.ClaimsNotRenewed(hellhound.NotReturned)
+    -> Misconfigured
+    hellhound.FixConfiguration, _ | hellhound.RejectRequest, _ -> Misconfigured
+  }
+}
+
+/// Until custody confirms the publication, the refreshed tokens exist only
+/// in the recovery value. Each unconfirmed attempt returns the value to pass
+/// to the next one. A request cannot wait for ever, so after a few attempts
+/// the value is handed to the caller, which keeps it and tries again.
+fn recover(
+  client: hellhound.Client,
+  recovery: hellhound.RefreshRecovery,
+  attempts: Int,
+) -> Decision {
+  case hellhound.recover_refresh(client, recovery) {
+    Error(hellhound.RefreshUnconfirmed(next)) if attempts > 1 ->
+      recover(client, next, attempts - 1)
+    Error(hellhound.RefreshUnconfirmed(next)) -> Recovering(next)
+    _ -> TryAgainLater
+  }
+}
+
+```
+
+<!-- prettier-ignore-end -->
+
+The bound limits the age of the last ID token. A removed role is denied within
+it only if your provider evaluates claims again on refresh, so verify that for
+your provider, request a refresh token, and keep node clocks within the clock
+tolerance. `authentication_time`, `acr` and `amr` always read the login's
+values. The [complete module](consumer/src/hellhound_reference/usage/authorization.gleam)
+runs against the local test provider.
+
 ## How it works
 
 ```mermaid
@@ -238,6 +376,11 @@ configuration alone supplies no introspection credentials.
 - Memory storage loses sessions on restart. Durable custody needs a protected
   32-byte sealing key, conditional writes and rollback protection; the application
   owns migrations, pool lifetime, capacity and backup policy.
+- Decide permissions from `hellhound.current_identity`, never from
+  `session_identity`. On `Reauthenticate` from it, call `logout` before
+  redirecting. On `FixConfiguration` deny the request, keep the session and
+  alert an operator. A long-lived connection checks on each incoming message and
+  closes on a timer when the claims pass the bound, without polling while idle.
 - Do not blindly resend a possibly consumed authorization code or refresh token.
   Branch on `login_error_action` or `session_error_action`; keep errors carrying
   `Recover` evidence for `recover_custody` or `recover_refresh`.
@@ -250,7 +393,8 @@ configuration alone supplies no introspection credentials.
 ## Examples and reference
 
 - [Usage modules](consumer/src/hellhound_reference/usage/): supervision, durable stores,
-  callback addresses, resource servers and a local HTTPS test provider. For a local run
+  callback addresses, resource servers, permission checks on current claims and a
+  local HTTPS test provider. For a local run
   with a real browser, the test provider can keep a fixed port and a loopback-only root
   the developer trusts once (`hellhound/testing`, development only).
 - [Relay integration](relay_consumer/src/recipe.gleam): JWT and introspection verifiers.

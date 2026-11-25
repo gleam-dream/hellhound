@@ -7,6 +7,14 @@
   "revokeRefreshToken": true,
   "refreshTokenMaxReuse": 0,
   "defaultSignatureAlgorithm": "RS256",
+  "roles": {
+    "realm": [
+      {
+        "name": "approver",
+        "description": "Disposable realm role removed and restored by the role-removal test."
+      }
+    ]
+  },
   "users": [
     {
       "username": "alice",
@@ -37,6 +45,22 @@
         {
           "type": "password",
           "value": "bob-disposable",
+          "temporary": false
+        }
+      ]
+    },
+    {
+      "username": "carol",
+      "enabled": true,
+      "email": "carol@example.test",
+      "emailVerified": true,
+      "firstName": "Carol",
+      "lastName": "Tester",
+      "realmRoles": ["approver"],
+      "credentials": [
+        {
+          "type": "password",
+          "value": "carol-disposable",
           "temporary": false
         }
       ]
@@ -102,6 +126,20 @@
             "id.token.claim": "false",
             "access.token.claim": "true",
             "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "realm-roles",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "config": {
+            "claim.name": "roles",
+            "jsonType.label": "String",
+            "multivalued": "true",
+            "id.token.claim": "true",
+            "access.token.claim": "false",
+            "userinfo.token.claim": "false",
+            "introspection.token.claim": "false"
           }
         }
       ]

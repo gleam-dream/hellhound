@@ -4,8 +4,9 @@
 //// application chooses how those facts authorize its requests. Each function
 //// below is one such decision, in the application's own types; the routes,
 //// session cookie, CSRF and origin policy are in `hellhound_reference/web` and
-//// `hellhound_reference/protect`. The design's "Application responsibilities"
-//// section states every obligation.
+//// `hellhound_reference/protect`, and a permission decided from claims of a
+//// bounded age is in `usage/authorization`. The design's "Application
+//// responsibilities" section states every obligation.
 
 import gleam/http/request
 import gleam/option.{None, Some}

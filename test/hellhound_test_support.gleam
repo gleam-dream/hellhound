@@ -125,6 +125,8 @@ pub type ScriptKey {
 pub type Behaviour {
   Delay(Int)
   Status(Int, String)
+  /// The status and error, answered after this many milliseconds.
+  DelayStatus(Int, Int, String)
   Close
   MalformedJson
   IdToken(String)
@@ -145,6 +147,77 @@ pub fn refresh_tokens(provider: Provider) -> List(String)
 
 @external(erlang, "hellhound_test_support_ffi", "keycloak_logout")
 pub fn keycloak_logout(url: String) -> Result(BrowserResult, Nil)
+
+pub type RoleChange {
+  Grant
+  Revoke
+}
+
+pub type FixtureMethod {
+  Get
+  Post
+  Delete
+}
+
+/// One HTTPS request to a local fixture signed by the test CA: the status
+/// and the body. A request without a body passes `""` for the content type
+/// and the body.
+@external(erlang, "hellhound_test_support_ffi", "fixture_http")
+fn fixture_http(
+  method: FixtureMethod,
+  url: String,
+  headers: List(#(String, String)),
+  content_type: String,
+  body: String,
+) -> #(Int, String)
+
+/// Grant or revoke a realm role of a user in the pinned Keycloak, through
+/// its admin REST API, as an administrator would. Idempotent in both
+/// directions.
+pub fn keycloak_realm_role(
+  user: String,
+  role: String,
+  change: RoleChange,
+) -> Nil {
+  let base = "https://localhost:18443"
+  let assert #(200, token_body) =
+    fixture_http(
+      Post,
+      base <> "/realms/master/protocol/openid-connect/token",
+      [],
+      "application/x-www-form-urlencoded",
+      "grant_type=password&client_id=admin-cli&username=admin&password=admin-disposable",
+    )
+  let assert Ok(token) =
+    json.parse(token_body, decode.at(["access_token"], decode.string))
+  let admin = base <> "/admin/realms/hellhound"
+  let auth = [#("authorization", "Bearer " <> token)]
+  let assert #(200, users) =
+    fixture_http(
+      Get,
+      admin <> "/users?exact=true&username=" <> user,
+      auth,
+      "",
+      "",
+    )
+  let assert Ok([user_id]) =
+    json.parse(users, decode.list(decode.at(["id"], decode.string)))
+  // The mapping takes the role's own representation, sent back as it came.
+  let assert #(200, representation) =
+    fixture_http(Get, admin <> "/roles/" <> role, auth, "", "")
+  let assert #(204, _) =
+    fixture_http(
+      case change {
+        Grant -> Post
+        Revoke -> Delete
+      },
+      admin <> "/users/" <> user_id <> "/role-mappings/realm",
+      auth,
+      "application/json",
+      "[" <> representation <> "]",
+    )
+  Nil
+}
 
 pub type NodeAction {
   NodeIdToken(String)
@@ -292,6 +365,11 @@ pub fn mint(
 /// Extra or replacement integer ID-token claims for every issued ID token.
 @external(erlang, "hellhound_test_provider", "set_claims")
 pub fn set_int_claims(provider: Provider, claims: Dict(String, Int)) -> Nil
+
+/// Extra or replacement ID-token claims of any JSON type for every issued
+/// ID token, replacing the earlier set.
+@external(erlang, "hellhound_test_provider", "set_claims")
+pub fn set_json_claims(provider: Provider, claims: Dict(String, Dynamic)) -> Nil
 
 /// A GET callback with this raw query and the binding cookie of `redirect`.
 pub fn query_callback(
