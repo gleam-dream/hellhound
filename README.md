@@ -211,7 +211,7 @@ is sealed with AES-256-GCM into a cookie that `login_response` sets:
   `Domain`), so a sibling subdomain cannot plant a pending login of its own. A
   cookie under any other name is ignored.
 - The cookie is also `HttpOnly`, `SameSite=Lax` (`None` with form-post
-  callbacks) and kept for the login lifetime (10 minutes by default). With
+  callbacks) and kept for the login lifetime (`config.with_login_lifetime`). With
   `Path=/` the browser sends each pending login's cookie on every request to
   the host until the callback or `Max-Age` ends it.
 - `complete_login` refuses a callback whose cookie is missing
