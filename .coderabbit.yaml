@@ -78,7 +78,7 @@ reviews:
           resolve it (AGENTS.md).
         - Core abstractions. Flag a second representation of a concept the
           design names (client, provider snapshot, cache incarnation, login
-          transaction, browser binding, verified identity, session reference,
+          transaction, login cookie, verified identity, session reference,
           custody, write condition, store version, refresh lease, custody
           recovery, refresh recovery, send evidence, access claims, action,
           sealing key ring, signed assertion, exchange token), a name that
@@ -243,7 +243,8 @@ reviews:
         - Flag `session_reference` kept outside a protected application
           session.
         - Flag state, nonce or PKCE recreated instead of using `begin_login`,
-          `login_response`, the browser-binding cookie and `complete_login`.
+          `login_response`, the login cookie, `complete_login` and
+          `callback_response`.
         - Flag a `case` on an `Action` that does not name `Reauthenticate`,
           `RetryLater`, `Recover`, `FixConfiguration` and `RejectRequest`, and
           `Recover` handled with a fresh token exchange instead of

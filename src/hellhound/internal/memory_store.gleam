@@ -2,22 +2,19 @@
 //// implementing the `hellhound/store` contract (compare-and-set `put`,
 //// `delete_expired`). Records do not survive a restart of the actor; each
 //// start draws a new random epoch, which lets custody tell a session lost on
-//// restart from one that never existed.
-////
-//// With a capacity, an insert into a full store first drops expired records
-//// (oldest first, in constant amortised time) and then refuses with
-//// `StoreFull`.
+//// restart from one that never existed. It has no capacity bound: sessions
+//// per identity are deliberately unbounded, and expired records leave with
+//// the sweeper's `delete_expired`.
 
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Subject}
 import gleam/list
-import gleam/option.{type Option, None, Some}
+import gleam/option.{type Option}
 import gleam/order
 import gleam/otp/actor
 import gleam/result
 import gleam/time/timestamp.{type Timestamp}
 import hellhound/internal/call
-import hellhound/internal/fifo.{type Fifo}
 import hellhound/internal/secure
 import hellhound/store.{type Record, type Store, type StoreError}
 
@@ -34,40 +31,23 @@ pub opaque type Message {
 }
 
 type State {
-  State(
-    records: Dict(String, Record),
-    order: Fifo(#(Timestamp, String)),
-    capacity: Option(Int),
-    clock: fn() -> Int,
-    epoch: String,
-  )
+  State(records: Dict(String, Record), clock: fn() -> Int, epoch: String)
 }
 
 pub fn start(
   name: process.Name(Message),
-  capacity: Option(Int),
   clock: fn() -> Int,
 ) -> actor.StartResult(Subject(Message)) {
-  actor.new(State(
-    records: dict.new(),
-    order: fifo.new(),
-    capacity:,
-    clock:,
-    epoch: secure.random_token(9),
-  ))
+  actor.new(State(records: dict.new(), clock:, epoch: secure.random_token(9)))
   |> actor.named(name)
   |> actor.on_message(handle)
   |> actor.start
 }
 
 /// An unnamed, unsupervised store linked to the caller (`hellhound/testing`).
-pub fn start_linked(
-  capacity: Option(Int),
-) -> Result(Subject(Message), actor.StartError) {
+pub fn start_linked() -> Result(Subject(Message), actor.StartError) {
   actor.new(State(
     records: dict.new(),
-    order: fifo.new(),
-    capacity:,
     clock: secure.now_seconds,
     epoch: secure.random_token(9),
   ))
@@ -89,26 +69,9 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
           actor.continue(state)
         }
         Ok(Nil) -> {
-          let state = case condition {
-            store.Absent -> make_room(state)
-            store.AtVersion(_) | store.AtVersionBefore(_, _) -> state
-          }
-          case condition, full(state) {
-            store.Absent, True -> {
-              process.send(reply, Error(store.StoreFull))
-              actor.continue(state)
-            }
-            _, _ -> {
-              let state =
-                State(
-                  ..state,
-                  records: dict.insert(state.records, record.key, record),
-                  order: fifo.push(state.order, #(record.expires_at, record.key)),
-                )
-              process.send(reply, Ok(store.Written))
-              actor.continue(state)
-            }
-          }
+          let records = dict.insert(state.records, record.key, record)
+          process.send(reply, Ok(store.Written))
+          actor.continue(State(..state, records:))
         }
       }
     }
@@ -116,14 +79,8 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       let #(expired, kept) =
         dict.to_list(state.records)
         |> list.partition(fn(entry) { not_after(entry.1.expires_at, now) })
-      let records = dict.from_list(kept)
-      let order =
-        kept
-        |> list.map(fn(entry) { #(entry.1.expires_at, entry.0) })
-        |> list.sort(fn(a, b) { timestamp.compare(a.0, b.0) })
-        |> list.fold(fifo.new(), fifo.push)
       process.send(reply, list.length(expired))
-      actor.continue(State(..state, records:, order:))
+      actor.continue(State(..state, records: dict.from_list(kept)))
     }
     Epoch(reply) -> {
       process.send(reply, state.epoch)
@@ -156,41 +113,6 @@ fn check_condition(
       }
     }
     _, _ -> Error(store.VersionConflict)
-  }
-}
-
-fn full(state: State) -> Bool {
-  case state.capacity {
-    Some(capacity) -> dict.size(state.records) >= capacity
-    None -> False
-  }
-}
-
-/// Drop expired records from the oldest end until the store has room.
-fn make_room(state: State) -> State {
-  let now = timestamp.from_unix_seconds(state.clock())
-  case full(state) {
-    False -> state
-    True ->
-      case fifo.pop(state.order) {
-        Ok(#(#(expires_at, key), rest)) ->
-          case not_after(expires_at, now) {
-            False -> state
-            True -> {
-              // Delete only if the record was not rewritten with a later expiry.
-              let records = case dict.get(state.records, key) {
-                Ok(record) ->
-                  case not_after(record.expires_at, now) {
-                    True -> dict.delete(state.records, key)
-                    False -> state.records
-                  }
-                Error(Nil) -> state.records
-              }
-              make_room(State(..state, records:, order: rest))
-            }
-          }
-        Error(Nil) -> state
-      }
   }
 }
 

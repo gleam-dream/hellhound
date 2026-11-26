@@ -231,8 +231,8 @@ pub type Login {
 pub type LoginOutcome {
   /// A session was installed.
   LoginSucceeded
-  /// The callback was malformed, unbound to this browser, replayed or
-  /// expired; nothing was sent.
+  /// The callback was malformed, carried no login cookie of this client
+  /// that opens, or expired; nothing was sent.
   LoginCallbackRefused
   /// The provider denied the authorization.
   LoginDenied
@@ -242,7 +242,8 @@ pub type LoginOutcome {
   LoginIdentityRejected
   /// Installation was not confirmed; a recovery value was returned.
   LoginCustodyUnconfirmed
-  /// A store did not answer, or the login timed out before the exchange.
+  /// Login was not configured, provider metadata was unavailable, or the
+  /// login timed out before the exchange.
   LoginUnavailable
 }
 

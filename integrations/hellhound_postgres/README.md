@@ -21,6 +21,28 @@ hellhound_postgres = { git = "https://github.com/gleam-dream/hellhound.git", ref
 
 Commit `gleam.toml` and `manifest.toml` to retain the resolved versions and Git commit.
 
+### Using Hellhound 0.4
+
+The release `hellhound_postgres-v0.2.1` accepts Hellhound 0.4 and is tagged after
+Hellhound 0.4.0 is on Hex. Until that tag exists, the block above is the only
+working pair: it requires Hellhound 0.3, so stay on Hellhound 0.3. After the tag
+exists, change both lines together:
+
+```toml
+hellhound = ">= 0.4.0 and < 0.5.0"
+hellhound_postgres = { git = "https://github.com/gleam-dream/hellhound.git", ref = "hellhound_postgres-v0.2.1", path = "integrations/hellhound_postgres" }
+```
+
+Then delete every call to `config.with_transaction_store`: Hellhound 0.4 keeps
+pending logins in sealed browser cookies and writes none to a store. Keep
+`config.with_custody_store(records)` and `config.with_sealing_key(key)`. The
+schema and the custody record format are unchanged, so installed sessions
+survive. Rows of pending logins that 0.3 wrote are no longer read: the session
+sweeper deletes them once they expire when the transaction store was the custody
+store; when it was a separate table or schema, drop it one login lifetime after
+the upgrade. The [Hellhound migration guide](https://github.com/gleam-dream/hellhound/blob/main/docs/MIGRATION.md)
+covers the rest of the upgrade.
+
 ## Configure the store
 
 The adapter tests configure a separate schema on a caller-owned pool `name`:
@@ -40,9 +62,10 @@ let records = hellhound_postgres.records(isolated)
 ```
 <!-- prettier-ignore-end -->
 
-The login integration test supplies the resulting store to Hellhound. Its fixture
-provides `db` and a local issuer `provider`; `key` is the sealing key prepared by
-the test:
+The login integration test supplies the resulting store to Hellhound as its
+custody store; pending logins live in sealed browser cookies and need no store.
+Its fixture provides `db` and a local issuer `provider`; `key` is the sealing key
+prepared by the test:
 
 <!-- prettier-ignore-start -->
 <!-- snips: test/hellhound_postgres_test.gleam#configure-client -->
@@ -51,7 +74,6 @@ let records = hellhound_postgres.records(adapter(db))
 let config =
   testing.config(provider, "https://app.test/callback")
   |> config.with_custody_store(records)
-  |> config.with_transaction_store(records)
   |> config.with_sealing_key(key)
 ```
 <!-- prettier-ignore-end -->

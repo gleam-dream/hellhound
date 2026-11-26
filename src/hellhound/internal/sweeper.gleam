@@ -1,7 +1,6 @@
-//// Deletes expired session and login records every minute, so abandoned
-//// sessions and logins leave the stores with their tokens. Each sweep is
-//// one bounded `delete_expired` call per store; a failure waits for the
-//// next tick.
+//// Deletes expired session records every minute, so abandoned sessions
+//// leave the store with their tokens. Each sweep is one bounded
+//// `delete_expired` call per store; a failure waits for the next tick.
 
 import gleam/erlang/process.{type Subject}
 import gleam/list

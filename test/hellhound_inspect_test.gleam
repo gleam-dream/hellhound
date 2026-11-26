@@ -1,5 +1,5 @@
 //// Public values never reveal secrets through `string.inspect`, `echo` or
-//// crash reports: client credentials, sealing keys, browser bindings,
+//// crash reports: client credentials, sealing keys, login cookies,
 //// session references, raw claims, tokens and redirect URLs carrying an ID
 //// token.
 
@@ -13,7 +13,7 @@ import hellhound
 import hellhound/config
 import hellhound/internal/custody
 import hellhound/testing
-import hellhound_login_test.{authorize, browser, logged_in, settings, start}
+import hellhound_login_test.{authorize, logged_in, settings, start}
 import hellhound_store_support as faults
 import hellhound_test_support as support
 
@@ -53,7 +53,7 @@ pub fn client_session_and_redirect_do_not_inspect_secrets_test() {
   support.set_claims(provider, dict.from_list([#("name", "SENTINEL-CLAIM")]))
   let client = start(settings(provider))
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let binding = binding_of(redirect)
   let assert Ok(session) =
     hellhound.complete_login(
@@ -124,7 +124,7 @@ pub fn installation_recovery_does_not_inspect_tokens_test() {
   let provider = support.provider_start(support.Standard)
   let #(client, control) = durable(provider)
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let request = authorize(provider, redirect, "inspect-recovery-code")
   faults.lose_ack_of(control, 1)
   let assert Error(hellhound.CustodyUnconfirmed(recovery)) =
@@ -211,7 +211,7 @@ pub fn logout_redirect_does_not_inspect_the_id_token_test() {
     hellhound.new(testing.config(provider, "https://app.test/callback"))
   let assert Ok(Nil) = hellhound.start(client)
   let assert Ok(redirect) =
-    hellhound.begin_login(client, browser(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let assert Ok(callback) =
     testing.authorize(provider, redirect, subject: "ada")
   let assert Ok(session) = hellhound.complete_login(client, callback)

@@ -253,7 +253,6 @@ fn exchange(
 
 /// The HTTP Gun configuration for a policy.
 pub fn gun_config(policy: Policy) -> config.Config {
-  let timeout = int.max(1, policy.timeout_ms)
   let allowed = destination.default()
   let allowed = case policy.allow_loopback {
     True -> destination.allow_loopback(allowed)
@@ -275,11 +274,6 @@ pub fn gun_config(policy: Policy) -> config.Config {
       SystemTrust -> config.SystemTrust
       Anchors(ders) -> config.Anchors(ders)
     })
-    // The request deadline bounds the whole exchange; connection setup,
-    // pool checkout, idle reads and idle pooled connections keep HTTP Gun's
-    // own tighter bounds (5 s, 5 s, 30 s, 60 s), so a saturated pool or a
-    // dead connection fails before the request deadline.
-    |> config.with_request_timeout(config.After(duration.milliseconds(timeout)))
     |> config.with_max_request_body_bytes(max_request_body)
     |> config.with_max_header_bytes(policy.max_header_bytes)
     |> config.with_max_header_count(policy.max_headers)

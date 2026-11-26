@@ -7,7 +7,6 @@
 //// allowed URI must be registered at the provider, and all of them are fixed
 //// when `hellhound.new` runs.
 
-import gleam/http/request
 import gleam/option.{Some}
 import hellhound
 import hellhound/config
@@ -24,14 +23,13 @@ pub fn allow_admin_callback(configuration: config.Config) -> config.Config {
 /// GET /admin/login
 pub fn admin_login(
   client: hellhound.Client,
-  req: request.Request(a),
 ) -> Result(hellhound.LoginRedirect, hellhound.LoginError) {
   let options =
     hellhound.LoginOptions(
       ..hellhound.default_login(),
       redirect_uri: Some(admin_callback),
     )
-  hellhound.begin_login(client, req, options)
+  hellhound.begin_login(client, options)
 }
 
 // snips-end: callback-addresses
@@ -50,14 +48,12 @@ pub fn run() -> Nil {
   let options = fn(uri) {
     hellhound.LoginOptions(..hellhound.default_login(), redirect_uri: Some(uri))
   }
-  let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), options(admin))
+  let assert Ok(redirect) = hellhound.begin_login(client, options(admin))
   let assert Ok(callback) =
     testing.authorize(provider, redirect, subject: "ada")
   assert callback.host == "admin.app.test"
   let assert Ok(_) = hellhound.complete_login(client, callback)
-  let assert Error(error) =
-    hellhound.begin_login(client, request.new(), options(admin <> "/"))
+  let assert Error(error) = hellhound.begin_login(client, options(admin <> "/"))
   assert error == hellhound.InvalidLoginOption(hellhound.RedirectUriNotAllowed)
   assert hellhound.login_error_action(error) == hellhound.FixConfiguration
   // The shown helpers build on the same types.

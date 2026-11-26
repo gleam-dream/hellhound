@@ -11,7 +11,6 @@
 //// answers are scripted too (`usage/authorization` uses them).
 
 import gleam/dynamic/decode
-import gleam/http/request
 import gleam/int
 import gleam/json
 import gleam/option.{None, Some}
@@ -29,7 +28,7 @@ pub fn sign_in_then_refuse() -> Nil {
   let assert Ok(Nil) = hellhound.start(client)
   // /login -> provider /authorize (signs "ada" in) -> /callback?code=...
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let assert Ok(callback) =
     testing.authorize(provider, redirect, subject: "ada")
   let assert Ok(session) = hellhound.complete_login(client, callback)
@@ -75,7 +74,7 @@ pub fn run() -> Nil {
   // Unit tests that hold the `LoginRedirect` skip HTTP.
   let sign_in = fn(subject) {
     let assert Ok(redirect) =
-      hellhound.begin_login(client, request.new(), hellhound.default_login())
+      hellhound.begin_login(client, hellhound.default_login())
     let assert Ok(callback) = testing.authorize(provider, redirect, subject:)
     let assert Ok(session) = hellhound.complete_login(client, callback)
     session

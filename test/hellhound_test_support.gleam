@@ -132,6 +132,9 @@ pub type Behaviour {
   IdToken(String)
   OmitIdToken
   DropRefreshToken
+  /// Leave `scope` out of the token response (RFC 6749 §5.1 allows it when
+  /// the granted scope is the requested one).
+  OmitScope
   Sub(String)
   /// Replace a string member of the token response.
   TokenField(String, String)
@@ -256,6 +259,9 @@ pub fn rotate_key(provider: Provider) -> Nil
 
 pub type WorkerName
 
+/// Kill the process registered under `name` and return once it has exited,
+/// so the next observation of `name` sees its replacement, never the
+/// killed process.
 @external(erlang, "hellhound_test_support_ffi", "worker_kill")
 pub fn worker_kill(name: a) -> Nil
 
@@ -371,7 +377,7 @@ pub fn set_int_claims(provider: Provider, claims: Dict(String, Int)) -> Nil
 @external(erlang, "hellhound_test_provider", "set_claims")
 pub fn set_json_claims(provider: Provider, claims: Dict(String, Dynamic)) -> Nil
 
-/// A GET callback with this raw query and the binding cookie of `redirect`.
+/// A GET callback with this raw query and the login cookie of `redirect`.
 pub fn query_callback(
   redirect: hellhound.LoginRedirect,
   query: String,
@@ -382,7 +388,7 @@ pub fn query_callback(
   )
 }
 
-/// A form-post callback with this body and the binding cookie of `redirect`.
+/// A form-post callback with this body and the login cookie of `redirect`.
 pub fn form_callback(
   redirect: hellhound.LoginRedirect,
   body: String,
@@ -393,7 +399,7 @@ pub fn form_callback(
   |> request.set_body(body)
 }
 
-/// The same request without any cookie (no browser binding).
+/// The same request without any cookie (no login cookie).
 pub fn without_binding(
   callback: request.Request(String),
 ) -> request.Request(String) {

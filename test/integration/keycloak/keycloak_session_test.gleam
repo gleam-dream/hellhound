@@ -1,7 +1,6 @@
 //// Session operations against the pinned Keycloak through Hellhound's API.
 
 import gleam/dynamic/decode
-import gleam/http/request
 import gleam/list
 import gleam/option.{Some}
 import gleam/string
@@ -29,7 +28,7 @@ fn start() -> hellhound.Client {
 
 fn session(client: hellhound.Client) -> hellhound.Session {
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let assert Ok(support.Query(query)) =
     support.keycloak_login(
       hellhound.login_url(redirect),

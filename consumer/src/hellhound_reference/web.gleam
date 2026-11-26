@@ -38,7 +38,7 @@ pub fn handle(request: Request, context: Context) -> Response {
 fn route(request: Request, context: Context) -> Response {
   case request.method, wisp.path_segments(request) {
     http.Get, [] -> home(request, context)
-    http.Get, ["login"] -> login(request, context, None)
+    http.Get, ["login"] -> login(context, None)
     http.Get, ["initiate-login"] -> third_party_initiated(request, context)
     http.Get, ["callback"] ->
       callback(request, context, http_request.set_body(request, ""))
@@ -81,11 +81,11 @@ fn same_origin(
 
 // --- Login -------------------------------------------------------------------
 
-fn login(request: Request, context: Context, hint: Option(String)) -> Response {
+fn login(context: Context, hint: Option(String)) -> Response {
   let options =
     hellhound.LoginOptions(..hellhound.default_login(), login_hint: hint)
-  case hellhound.begin_login(context.client, request, options) {
-    // Hellhound sets the browser-binding cookie and the redirect.
+  case hellhound.begin_login(context.client, options) {
+    // Hellhound sets the sealed login cookie and the redirect.
     Ok(redirect) -> hellhound.login_response(wisp.response(303), redirect)
     Error(error) ->
       page(
@@ -101,16 +101,22 @@ fn third_party_initiated(request: Request, context: Context) -> Response {
   let query = wisp.get_query(request)
   case list.key_find(query, "iss") {
     Ok(issuer) if issuer == context.issuer ->
-      login(
-        request,
-        context,
-        option.from_result(list.key_find(query, "login_hint")),
-      )
+      login(context, option.from_result(list.key_find(query, "login_hint")))
     _ -> page(400, "Unknown issuer", "<p>Login initiation rejected.</p>")
   }
 }
 
 fn callback(
+  request: Request,
+  context: Context,
+  callback: http_request.Request(String),
+) -> Response {
+  // Whatever the outcome, the browser drops this login's cookie.
+  complete(request, context, callback)
+  |> hellhound.callback_response(context.client, callback)
+}
+
+fn complete(
   request: Request,
   context: Context,
   callback: http_request.Request(String),

@@ -1,4 +1,4 @@
-//// A storage port for Hellhound's opaque login and custody records.
+//// A storage port for Hellhound's opaque custody records.
 ////
 //// Stores provide three operations: `get`, conditional `put`, and
 //// `delete_expired`. Hellhound owns protocol transitions and seals every record;

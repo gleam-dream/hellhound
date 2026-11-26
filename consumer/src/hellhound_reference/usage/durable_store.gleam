@@ -1,7 +1,8 @@
 //// Usage: durable sessions across restarts and several nodes.
 ////
-//// By default sessions and pending logins live in memory, so a restart of
-//// the custody store loses them (`SessionLost`). A store adapter is three
+//// By default sessions live in memory, so a restart of the custody store
+//// loses them (`SessionLost`). Pending logins live in sealed browser
+//// cookies; every node that serves callbacks needs the same sealing key. A store adapter is three
 //// functions over the application's database; Hellhound seals every record
 //// (AES-256-GCM) and binds it to its key and version, so the database holds
 //// no token, verifier or session reference. The in-memory store from
@@ -9,7 +10,6 @@
 //// implements the same conditional-write contract.
 
 import gleam/crypto
-import gleam/http/request
 import gleam/option.{Some}
 import gleam/time/timestamp
 import hellhound
@@ -27,8 +27,8 @@ pub fn adapter(table: store.Store) -> store.Store {
   )
 }
 
-/// Durable custody and login storage, sealed with a 32-byte key from a
-/// secret manager.
+/// Durable custody, sealed with a 32-byte key from a secret manager. The
+/// same key seals login cookies, so any node can complete a login.
 pub fn with_durable_store(
   configuration: config.Config,
   records: store.Store,
@@ -37,7 +37,6 @@ pub fn with_durable_store(
   let assert Ok(key) = config.sealing_key(sealing_key_bytes)
   configuration
   |> config.with_custody_store(records)
-  |> config.with_transaction_store(records)
   |> config.with_sealing_key(key)
 }
 
@@ -72,9 +71,9 @@ pub fn conditional_writes() -> Nil {
   Nil
 }
 
-/// A second client on the same store and sealing key (another node) restores
-/// a session the first client created, and the adapter passes the contract
-/// check.
+/// Two clients on the same store and sealing key (two nodes): a login
+/// started on one completes on the other, the first restores the session,
+/// and the adapter passes the contract check.
 pub fn run() -> Nil {
   conditional_writes()
   let table = testing.memory_store()
@@ -92,14 +91,15 @@ pub fn run() -> Nil {
     client
   }
   let first = node()
+  let second = node()
+  // The login starts on one node and its callback reaches the other.
   let assert Ok(redirect) =
-    hellhound.begin_login(first, request.new(), hellhound.default_login())
+    hellhound.begin_login(first, hellhound.default_login())
   let assert Ok(callback) =
     testing.authorize(provider, redirect, subject: "ada")
-  let assert Ok(session) = hellhound.complete_login(first, callback)
-  let second = node()
+  let assert Ok(session) = hellhound.complete_login(second, callback)
   let assert Ok(restored) =
-    hellhound.restore_session(second, hellhound.session_reference(session))
+    hellhound.restore_session(first, hellhound.session_reference(session))
   assert hellhound.subject(hellhound.session_identity(restored)) == "ada"
   hellhound.stop(second)
   hellhound.stop(first)

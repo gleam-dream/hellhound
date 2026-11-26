@@ -2,7 +2,6 @@
 //// the caller's correlation on every event and HTTP Gun request.
 
 import gleam/erlang/process
-import gleam/http/request
 import gleam/list
 import gleam/option.{None, Some}
 import hellhound
@@ -129,7 +128,7 @@ pub fn correlation_follows_the_session_test() {
   let assert Ok(_) =
     sinal.with_subscriptions(plan, fn() {
       let assert Ok(redirect) =
-        hellhound.begin_login(tagged, request.new(), hellhound.default_login())
+        hellhound.begin_login(tagged, hellhound.default_login())
       let assert Ok(callback) =
         testing.authorize(provider, redirect, subject: "ada")
       let assert Ok(session) = hellhound.complete_login(tagged, callback)

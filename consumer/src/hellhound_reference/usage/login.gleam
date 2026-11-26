@@ -25,9 +25,9 @@ pub fn start(secret: String) -> Result(hellhound.Client, hellhound.StartError) {
   client
 }
 
-/// GET /login: Hellhound sets the browser-binding cookie and the redirect.
-pub fn login(client: hellhound.Client, req: Request(a)) -> Response(String) {
-  case hellhound.begin_login(client, req, hellhound.default_login()) {
+/// GET /login: the redirect to the provider and the sealed login cookie.
+pub fn login(client: hellhound.Client) -> Response(String) {
+  case hellhound.begin_login(client, hellhound.default_login()) {
     Ok(redirect) -> hellhound.login_response(response.new(303), redirect)
     Error(error) ->
       response.new(503)
@@ -39,13 +39,17 @@ pub fn login(client: hellhound.Client, req: Request(a)) -> Response(String) {
 pub fn callback(
   client: hellhound.Client,
   req: Request(String),
-) -> Result(String, hellhound.Action) {
+  signed_in: fn(String) -> Response(String),
+  failed: fn(hellhound.Action) -> Response(String),
+) -> Response(String) {
   case hellhound.complete_login(client, req) {
     // Keep the reference in the application's session.
-    Ok(session) -> Ok(hellhound.session_reference(session))
+    Ok(session) -> signed_in(hellhound.session_reference(session))
     // Reauthenticate, RejectRequest, Recover, ...
-    Error(error) -> Error(hellhound.login_error_action(error))
+    Error(error) -> failed(hellhound.login_error_action(error))
   }
+  // Whatever the outcome, the browser drops this login's cookie.
+  |> hellhound.callback_response(client, req)
 }
 
 /// Any later request: a current token, refreshed within 30 s of expiry;

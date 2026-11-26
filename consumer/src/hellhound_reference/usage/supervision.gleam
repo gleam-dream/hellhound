@@ -7,7 +7,6 @@
 //// the tree against the local test provider and waits for readiness.
 
 import gleam/erlang/process
-import gleam/http/request
 import gleam/otp/actor
 import gleam/otp/static_supervisor as supervisor
 import gleam/result
@@ -46,7 +45,7 @@ pub fn run() -> Nil {
   // Background discovery: operations fail until the provider is ready.
   assert wait_until_ready(client, 100) == Ok(Nil)
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   let assert Ok(callback) =
     testing.authorize(provider, redirect, subject: "ada")
   let assert Ok(session) = hellhound.complete_login(client, callback)
@@ -62,7 +61,7 @@ fn wait_until_ready(
   client: hellhound.Client,
   attempts: Int,
 ) -> Result(Nil, Nil) {
-  case hellhound.begin_login(client, request.new(), hellhound.default_login()) {
+  case hellhound.begin_login(client, hellhound.default_login()) {
     Ok(_) -> Ok(Nil)
     Error(hellhound.LoginProviderUnavailable(hellhound.ProviderNotReady)) ->
       case attempts {

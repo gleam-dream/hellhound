@@ -42,17 +42,18 @@
 //// | store call | 5 s | `with_store_timeout` |
 //// | `complete_login`, end to end | 30 s | `with_login_timeout` |
 //// | pending login | 10 min | `with_login_lifetime` |
-//// | pending logins in the built-in store | 100 000 | `with_max_pending_logins` |
 //// | session | 12 h absolute, 1 h idle | `with_session_lifetime` |
 //// | clock tolerance (`iat`, `nbf`, `auth_time`; never `exp`) | 5 s | `with_clock_tolerance` |
 //// | refresh before expiry | 30 s | `with_refresh_margin` |
 //// | wait for another request's refresh | 5 s | `with_refresh_wait` |
-//// | session and login storage | in memory | `with_custody_store`, `with_transaction_store` |
+//// | session storage | in memory | `with_custody_store` |
+//// | pending logins | sealed in a browser cookie, never on the server | none |
 ////
 //// Secrets (`Secret`, `SigningKey`, `SealingKey`) are held in closures, so
 //// `string.inspect` of a configuration prints no credential.
 
 import gleam/bit_array
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -290,14 +291,12 @@ fn base(
     store_timeout_ms: 5000,
     login_timeout_ms: 30_000,
     login_lifetime_seconds: 600,
-    max_pending_logins: 100_000,
     session_absolute_seconds: 43_200,
     session_idle_seconds: 3600,
     clock_tolerance_seconds: 5,
     refresh_margin_seconds: 30,
     refresh_wait_ms: 5000,
     custody_store: None,
-    transaction_store: None,
     sealing_key: None,
     previous_sealing_keys: [],
     clock: secure.now_seconds,
@@ -432,14 +431,6 @@ pub fn with_login_lifetime(config: Config, lifetime: Duration) -> Config {
   Settings(..config, login_lifetime_seconds: whole_seconds(lifetime))
 }
 
-/// Capacity of the built-in in-memory login store, counting pending logins
-/// and recently completed ones (kept to detect replays). A full store
-/// answers `TooManyPendingLogins`. Between 1 and 10 000 000; default
-/// 100 000. A durable store enforces its own capacity (`store.StoreFull`).
-pub fn with_max_pending_logins(config: Config, count: Int) -> Config {
-  Settings(..config, max_pending_logins: count)
-}
-
 /// How long a session lasts in custody: `absolute` after login at most, and
 /// `idle` without use (restore, access token, userinfo, refresh). Expired
 /// sessions are removed with their tokens. Defaults: 12 hours absolute, 1
@@ -495,15 +486,14 @@ pub fn with_custody_store(config: Config, store: Store) -> Config {
   Settings(..config, custody_store: Some(store))
 }
 
-/// Keep pending logins in this store instead of memory, so a callback may
-/// reach another node. Needs `with_sealing_key`.
-pub fn with_transaction_store(config: Config, store: Store) -> Config {
-  Settings(..config, transaction_store: Some(store))
-}
-
-/// The key that seals records in durable stores. New records are sealed with
-/// it; records sealed with a key passed to `with_previous_sealing_keys` are
-/// still read, so a key can be rotated without signing users out.
+/// The key that seals records in durable stores and pending logins in login
+/// cookies. New values are sealed with it; values sealed with a key passed
+/// to `with_previous_sealing_keys` are still read, so a key can be rotated
+/// without signing users out.
+///
+/// Without it each client seals with a random key held in memory: a login
+/// callback must then reach the same node, before a restart. Give every node
+/// that serves callbacks the same key.
 pub fn with_sealing_key(config: Config, key: SealingKey) -> Config {
   Settings(..config, sealing_key: Some(redacted.new(key.reveal())))
 }
@@ -535,7 +525,6 @@ pub type Limit {
   StoreTimeout
   LoginTimeout
   LoginLifetime
-  MaxPendingLogins
   SessionLifetime
   ClockTolerance
   RefreshMargin
@@ -577,6 +566,10 @@ pub type ConfigError {
   ServiceClientNeedsCredentials
   /// A durable store is configured without `with_sealing_key`.
   SealingKeyRequired
+  /// The issuer, client id, longest redirect URI and configured scopes
+  /// together exceed 2 KiB, so the login cookie would exceed the 4 KiB a
+  /// browser keeps.
+  LoginCookieTooLarge
 }
 
 /// Check a configuration without starting anything. Returns every problem
@@ -614,7 +607,6 @@ pub fn validate(config: Config) -> Result(Nil, List(ConfigError)) {
     limit(config.store_timeout_ms, 1, 600_000, StoreTimeout),
     limit(config.login_timeout_ms, 1, 600_000, LoginTimeout),
     limit(config.login_lifetime_seconds, 1, 86_400, LoginLifetime),
-    limit(config.max_pending_logins, 1, 10_000_000, MaxPendingLogins),
     limit(config.clock_tolerance_seconds, 0, 300, ClockTolerance),
     limit(config.refresh_margin_seconds, 0, 3600, RefreshMargin),
     limit(config.refresh_wait_ms, 0, 60_000, RefreshWait),
@@ -647,11 +639,10 @@ pub fn validate(config: Config) -> Result(Nil, List(ConfigError)) {
       ClientSecretTooShort,
     ),
     check(
-      config.sealing_key != None
-        || config.custody_store == None
-        && config.transaction_store == None,
+      config.sealing_key != None || config.custody_store == None,
       SealingKeyRequired,
     ),
+    check(!relying_party || login_cookie_fits(config), LoginCookieTooLarge),
   ]
   let scope_errors =
     config.scopes
@@ -679,6 +670,28 @@ pub fn validate(config: Config) -> Result(Nil, List(ConfigError)) {
     [] -> Ok(Nil)
     errors -> Error(errors)
   }
+}
+
+/// The login cookie seals the issuer, client id, redirect URI and requested
+/// scopes with about 250 bytes of fixed material and grows by a third in
+/// base64url; 2 KiB of variable text keeps it under the 4 KiB a browser
+/// keeps per cookie. Each configured scope costs its bytes plus 3 for its
+/// JSON quotes and separator. `begin_login` checks the sealed cookie itself,
+/// which also counts the per-login scopes.
+fn login_cookie_fits(config: Config) -> Bool {
+  let longest =
+    [config.redirect_uri, ..config.allowed_redirect_uris]
+    |> list.map(string.byte_size)
+    |> list.fold(0, int.max)
+  let scopes =
+    config.scopes
+    |> list.map(fn(scope) { string.byte_size(scope) + 3 })
+    |> int.sum
+  string.byte_size(config.issuer)
+  + string.byte_size(config.client_id)
+  + longest
+  + scopes
+  <= 2048
 }
 
 fn check(condition: Bool, error: ConfigError) -> Option(ConfigError) {
@@ -725,6 +738,8 @@ pub fn describe_config_error(error: ConfigError) -> String {
     ServiceClientNeedsCredentials ->
       "service_client needs client authentication, not PublicClient"
     SealingKeyRequired -> "a durable store needs with_sealing_key"
+    LoginCookieTooLarge ->
+      "the issuer, client id, longest redirect URI and scopes must fit in 2 KiB together, so the login cookie fits in 4 KiB"
   }
 }
 
@@ -737,8 +752,6 @@ fn describe_limit(which: Limit) -> String {
     StoreTimeout -> "with_store_timeout must be between 1 ms and 10 minutes"
     LoginTimeout -> "with_login_timeout must be between 1 ms and 10 minutes"
     LoginLifetime -> "with_login_lifetime must be between 1 s and 1 day"
-    MaxPendingLogins ->
-      "with_max_pending_logins must be between 1 and 10 000 000"
     SessionLifetime ->
       "with_session_lifetime needs 0 < idle <= absolute <= 1 year (whole seconds)"
     ClockTolerance -> "with_clock_tolerance must be between 0 and 300 s"

@@ -17,15 +17,11 @@ pub fn every_login_error_describes_itself_and_has_an_action_test() {
     hellhound.LoginNotConfigured,
     hellhound.LoginProviderUnavailable(hellhound.ProviderNotReady),
     hellhound.LoginProviderIncompatible([hellhound.NoS256]),
-    hellhound.LoginStoreUnavailable,
-    hellhound.TooManyPendingLogins,
     hellhound.CallbackMalformed(hellhound.MissingState),
-    hellhound.CallbackRejected(hellhound.BrowserBindingMismatch),
+    hellhound.CallbackRejected(hellhound.LoginCookieMissing),
+    hellhound.CallbackRejected(hellhound.LoginCookieInvalid),
+    hellhound.CallbackRejected(hellhound.ForeignLogin),
     hellhound.LoginExpired,
-    hellhound.LoginReplayed,
-    hellhound.LoginChanged,
-    hellhound.TransactionStoreUnavailable,
-    hellhound.LoginRecordUnreadable,
     hellhound.ProviderDenied(hellhound.AccessDenied),
     hellhound.ProviderUnavailableBeforeExchange(hellhound.ProviderNotReady),
     hellhound.ExchangeRejected(hellhound.InvalidGrant),
@@ -137,7 +133,8 @@ pub fn other_errors_describe_themselves_test() {
 
 /// The connect, pool-checkout, idle-read and idle
 /// connection bounds are HTTP Gun's own (5 s, 5 s, 30 s, 60 s), not copies
-/// of the request timeout.
+/// of the request timeout, which each call sets as its own deadline
+/// (`transport_test` and `transport_pool_test`).
 pub fn http_gun_keeps_its_separate_bounds_test() {
   let policy =
     transport.Policy(
@@ -147,7 +144,6 @@ pub fn http_gun_keeps_its_separate_bounds_test() {
   let gun = transport.gun_config(policy)
   assert gun.connect_timeout == 5000
   assert gun.pool_timeout == 5000
-  assert gun.request_timeout == gun_settings.Within(20_000)
   assert gun.idle_timeout == gun_settings.Within(30_000)
   assert gun.connection_idle_timeout == 60_000
 }

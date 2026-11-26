@@ -11,7 +11,7 @@ import wisp.{type Request, type Response}
 
 /// `__Host-` cookies must be `Secure`, have `Path=/` and no `Domain`, so a
 /// sibling subdomain or a plaintext response cannot plant them. Hellhound sets
-/// its own browser-binding cookie (`hellhound.login_response`).
+/// its own login cookies (`hellhound.login_response`).
 pub const session_cookie = "__Host-hellhound_session"
 
 /// Attributes of the session cookie.

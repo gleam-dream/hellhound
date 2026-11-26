@@ -8,7 +8,6 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import hellhound/internal/custody.{type Custody}
-import hellhound/internal/logins.{type Logins}
 import hellhound/internal/memory_store
 import hellhound/internal/native/client as native
 import hellhound/internal/native/provider
@@ -25,7 +24,6 @@ pub type Names {
     sweeper: process.Name(sweeper.Message),
     /// The in-memory stores, when no durable store is configured.
     memory_custody: Option(process.Name(memory_store.Message)),
-    memory_logins: Option(process.Name(memory_store.Message)),
     pool: transport.Pool,
   )
 }
@@ -38,7 +36,6 @@ pub type Client {
     names: Names,
     backend: native.Client,
     custody: Custody,
-    logins: Logins,
     /// Request policy on the client's shared HTTP Gun client.
     http: transport.Policy,
     correlation: Option(Correlation),
@@ -58,7 +55,6 @@ pub fn await_previous_children(
       transport.pool_process(names.pool),
       process.named(names.provider),
       process.named(names.sweeper),
-      optional_process(names.memory_logins),
       optional_process(names.memory_custody),
     ]
     |> list.filter_map(fn(pid) { pid })

@@ -3,7 +3,6 @@
 //// and no introspection endpoint in discovery (introspection is an admin
 //// API there).
 
-import gleam/http/request
 import gleam/option.{Some}
 import gleam/string
 import hellhound
@@ -29,7 +28,7 @@ fn client() -> hellhound.Client {
 
 fn login(client: hellhound.Client) -> hellhound.Session {
   let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
+    hellhound.begin_login(client, hellhound.default_login())
   // The consent app lives on another port of the same host.
   let assert Ok(support.Query(query)) =
     support.authorize(hellhound.login_url(redirect), "https://localhost:1444")

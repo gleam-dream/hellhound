@@ -4,10 +4,8 @@ import gleam/crypto
 import gleam/dynamic/decode
 import gleam/erlang/atom
 import gleam/erlang/process
-import gleam/http/request
 import gleam/list
 import gleam/option.{None, Some}
-import gleam/order
 import gleam/time/duration
 import gleam/time/timestamp
 import gleeunit
@@ -88,7 +86,6 @@ pub fn login_survives_a_new_client_and_logout_revokes_the_reference_test() -> Ni
   let config =
     testing.config(provider, "https://app.test/callback")
     |> config.with_custody_store(records)
-    |> config.with_transaction_store(records)
     |> config.with_sealing_key(key)
   // snips-end: configure-client
   let assert Ok(first) = hellhound.new(config)
@@ -96,7 +93,7 @@ pub fn login_survives_a_new_client_and_logout_revokes_the_reference_test() -> Ni
     use <- exception.defer(fn() { hellhound.stop(first) })
     let assert Ok(Nil) = hellhound.start(first)
     let assert Ok(redirect) =
-      hellhound.begin_login(first, request.new(), hellhound.default_login())
+      hellhound.begin_login(first, hellhound.default_login())
     let assert Ok(callback) =
       testing.authorize(provider, redirect, subject: "alice")
     let assert Ok(session) = hellhound.complete_login(first, callback)
@@ -307,7 +304,6 @@ pub fn two_clients_share_one_rotating_refresh_through_postgres_test() -> Nil {
     testing.config(provider, "https://app.test/callback")
     |> config.with_scopes(["email", "profile", "offline_access"])
     |> config.with_custody_store(records)
-    |> config.with_transaction_store(records)
     |> config.with_sealing_key(key)
   let assert Ok(first) = hellhound.new(config)
   let assert Ok(second) = hellhound.new(config)
@@ -316,7 +312,7 @@ pub fn two_clients_share_one_rotating_refresh_through_postgres_test() -> Nil {
   let assert Ok(Nil) = hellhound.start(first)
   let assert Ok(Nil) = hellhound.start(second)
   let assert Ok(redirect) =
-    hellhound.begin_login(first, request.new(), hellhound.default_login())
+    hellhound.begin_login(first, hellhound.default_login())
   let assert Ok(callback) =
     testing.authorize(provider, redirect, subject: "alice")
   let assert Ok(session) = hellhound.complete_login(first, callback)
@@ -512,95 +508,6 @@ fn await_database(check: fn() -> Bool, attempts: Int) -> Nil {
       should.be_true(attempts > 0)
       process.sleep(10)
       await_database(check, attempts - 1)
-    }
-  }
-}
-
-type ConsumptionDelay {
-  BeforeConsumption
-  AfterConsumption
-  LostConsumptionReply
-}
-
-pub fn postgres_delayed_consumption_prevents_expired_login_exchange_test() -> Nil {
-  delayed_consumption(BeforeConsumption)
-}
-
-pub fn postgres_timely_consumption_allows_late_acknowledgement_test() -> Nil {
-  delayed_consumption(AfterConsumption)
-}
-
-pub fn postgres_unknown_consumption_never_authorizes_exchange_test() -> Nil {
-  delayed_consumption(LostConsumptionReply)
-}
-
-fn delayed_consumption(delay: ConsumptionDelay) -> Nil {
-  use name <- database
-  let assert Ok(provider) = testing.start_provider(testing.provider_options())
-  use <- exception.defer(fn() { testing.stop_provider(provider) })
-  let records = hellhound_postgres.records(adapter(name))
-  let guarded =
-    store.new(
-      get: store.get(records, _),
-      put: fn(record, condition) {
-        case condition {
-          store.Absent | store.AtVersion(_) ->
-            store.put(records, record, condition)
-          store.AtVersionBefore(_, deadline) -> {
-            timestamp.compare(timestamp.system_time(), deadline)
-            |> should.equal(order.Lt)
-            case delay {
-              BeforeConsumption -> process.sleep(2500)
-              AfterConsumption | LostConsumptionReply -> Nil
-            }
-            let outcome = store.put(records, record, condition)
-            case delay {
-              BeforeConsumption -> outcome
-              AfterConsumption -> {
-                process.sleep(2500)
-                outcome
-              }
-              LostConsumptionReply -> {
-                outcome |> should.equal(Ok(store.Written))
-                Error(store.StoreOutcomeUnknown)
-              }
-            }
-          }
-        }
-      },
-      delete_expired: store.delete_expired(records, _),
-    )
-  let assert Ok(key) = config.sealing_key(crypto.strong_random_bytes(32))
-  let assert Ok(client) =
-    testing.config(provider, "https://app.test/callback")
-    |> config.with_transaction_store(guarded)
-    |> config.with_sealing_key(key)
-    |> config.with_login_lifetime(duration.seconds(2))
-    |> config.with_store_timeout(duration.seconds(10))
-    |> hellhound.new
-  use <- exception.defer(fn() { hellhound.stop(client) })
-  let assert Ok(Nil) = hellhound.start(client)
-  let assert Ok(redirect) =
-    hellhound.begin_login(client, request.new(), hellhound.default_login())
-  let assert Ok(callback) =
-    testing.authorize(provider, redirect, subject: "alice")
-  let completed = hellhound.complete_login(client, callback)
-  case delay {
-    BeforeConsumption -> {
-      completed |> should.equal(Error(hellhound.LoginExpired))
-      testing.requests(provider).code_grants |> should.equal(0)
-    }
-    AfterConsumption -> {
-      completed |> should.be_ok
-      testing.requests(provider).code_grants |> should.equal(1)
-      hellhound.complete_login(client, callback)
-      |> should.equal(Error(hellhound.LoginReplayed))
-    }
-    LostConsumptionReply -> {
-      completed |> should.equal(Error(hellhound.TransactionStoreUnavailable))
-      testing.requests(provider).code_grants |> should.equal(0)
-      hellhound.complete_login(client, callback)
-      |> should.equal(Error(hellhound.LoginReplayed))
     }
   }
 }
