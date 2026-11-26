@@ -259,6 +259,9 @@ pub fn rotate_key(provider: Provider) -> Nil
 
 pub type WorkerName
 
+/// Kill the process registered under `name` and return once it has exited,
+/// so the next observation of `name` sees its replacement, never the
+/// killed process.
 @external(erlang, "hellhound_test_support_ffi", "worker_kill")
 pub fn worker_kill(name: a) -> Nil
 

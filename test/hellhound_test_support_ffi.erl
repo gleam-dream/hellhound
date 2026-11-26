@@ -176,8 +176,19 @@ form_login(Url, Prefix, Fields) ->
     {Result, _} = hellhound_test_browser:form_login(Url, Prefix, [{binary_to_list(K), binary_to_list(V)} || {K, V} <- Fields], 12),
     to_gleam(Result).
 
+%% exit/2 returns before the signal takes effect: the killed process can
+%% stay registered, and keep serving, for a while after it. Return only once
+%% it is gone, so the caller's next observation is of its replacement.
 worker_kill(Name) ->
-    case whereis(Name) of undefined -> nil; Pid -> exit(Pid, kill), nil end.
+    case whereis(Name) of
+        undefined -> nil;
+        Pid ->
+            Ref = monitor(process, Pid),
+            exit(Pid, kill),
+            receive {'DOWN', Ref, process, Pid, _} -> nil
+            after 5000 -> error({worker_not_killed, Name})
+            end
+    end.
 worker_alive(Name) -> whereis(Name) =/= undefined.
 atom_count() -> erlang:system_info(atom_count).
 process_count() -> erlang:system_info(process_count).
