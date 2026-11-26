@@ -14,24 +14,18 @@ Add Hellhound and Pog from Hex and the PostgreSQL adapter from its Git subdirect
 
 ```toml
 [dependencies]
-hellhound = ">= 0.3.0 and < 0.4.0"
+hellhound = ">= 0.4.0 and < 0.5.0"
 pog = ">= 4.1.0 and < 4.2.0"
-hellhound_postgres = { git = "https://github.com/gleam-dream/hellhound.git", ref = "hellhound_postgres-v0.2.0", path = "integrations/hellhound_postgres" }
+hellhound_postgres = { git = "https://github.com/gleam-dream/hellhound.git", ref = "hellhound_postgres-v0.2.1", path = "integrations/hellhound_postgres" }
 ```
 
 Commit `gleam.toml` and `manifest.toml` to retain the resolved versions and Git commit.
 
-### Using Hellhound 0.4
+### Upgrading from 0.2.0 to Hellhound 0.4
 
-The release `hellhound_postgres-v0.2.1` accepts Hellhound 0.4 and is tagged after
-Hellhound 0.4.0 is on Hex. Until that tag exists, the block above is the only
-working pair: it requires Hellhound 0.3, so stay on Hellhound 0.3. After the tag
-exists, change both lines together:
-
-```toml
-hellhound = ">= 0.4.0 and < 0.5.0"
-hellhound_postgres = { git = "https://github.com/gleam-dream/hellhound.git", ref = "hellhound_postgres-v0.2.1", path = "integrations/hellhound_postgres" }
-```
+Release 0.2.0 requires Hellhound 0.3, and release 0.2.1 requires Hellhound 0.4.
+Change the `hellhound` and `hellhound_postgres` lines together, to the values in
+the block above.
 
 Then delete every call to `config.with_transaction_store`: Hellhound 0.4 keeps
 pending logins in sealed browser cookies and writes none to a store. Keep
@@ -40,7 +34,7 @@ schema and the custody record format are unchanged, so installed sessions
 survive. Rows of pending logins that 0.3 wrote are no longer read: the session
 sweeper deletes them once they expire when the transaction store was the custody
 store; when it was a separate table or schema, drop it one login lifetime after
-the upgrade. The [Hellhound migration guide](https://github.com/gleam-dream/hellhound/blob/main/docs/MIGRATION.md)
+the upgrade. The [Hellhound migration guide](https://github.com/gleam-dream/hellhound/blob/main/docs/MIGRATION.md#postgresql-adapter)
 covers the rest of the upgrade.
 
 ## Configure the store

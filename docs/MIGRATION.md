@@ -108,7 +108,7 @@ Hellhound telemetry handlers attached with `sinal.observe` now belong to the pro
 
 ## PostgreSQL adapter
 
-`hellhound_postgres` 0.2.1 (Git tag `hellhound_postgres-v0.2.1`) is the adapter release that accepts Hellhound 0.4. It serves custody only. It is tagged after Hellhound 0.4.0 is on Hex; until then the adapter [README](https://github.com/gleam-dream/hellhound/blob/main/integrations/hellhound_postgres/README.md) shows 0.2.0, which requires Hellhound 0.3, so stay on Hellhound 0.3 until that tag exists.
+`hellhound_postgres` 0.2.1 (Git tag `hellhound_postgres-v0.2.1`) is the adapter release that accepts Hellhound 0.4. It serves custody only. Release 0.2.0 requires Hellhound 0.3. The adapter [README](https://github.com/gleam-dream/hellhound/blob/main/integrations/hellhound_postgres/README.md) shows the installation.
 
 - Move to `ref = "hellhound_postgres-v0.2.1"` and to `hellhound >= 0.4.0 and < 0.5.0` together.
 - Delete `config.with_transaction_store(records)`. Keep `config.with_custody_store(records)` and `config.with_sealing_key(key)`.
