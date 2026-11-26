@@ -3,7 +3,7 @@
 Notable changes to Hellhound. Versions follow semantic versioning; before 1.0 a
 minor version may break compatibility.
 
-## Unreleased
+## 0.4.0
 
 Pending logins move from a server-side store into sealed per-login browser
 cookies. This release breaks the login API; the
