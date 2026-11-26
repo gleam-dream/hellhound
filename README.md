@@ -1,5 +1,13 @@
 # Hellhound
 
+> **Hellhound 0.4.0 is a breaking release.** Read the [migration guide](https://github.com/gleam-dream/hellhound/blob/main/docs/MIGRATION.md) before you upgrade from 0.3.
+>
+> - Pending logins live in sealed per-login browser cookies; the server keeps no login state.
+> - `begin_login` loses its request argument, and the callback response must pass through `callback_response`.
+> - `config.with_transaction_store` and `config.with_max_pending_logins` are removed; share `config.with_sealing_key` across nodes instead.
+> - Login errors for the removed store are gone; callbacks are refused as `LoginCookieMissing`, `LoginCookieInvalid` or `ForeignLogin`.
+> - Depend on `sinal >= 0.2.0 and < 0.3.0` and `http_gun >= 0.4.0 and < 0.5.0`.
+
 [![CI](https://github.com/gleam-dream/hellhound/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/gleam-dream/hellhound/actions/workflows/ci.yml)
 [![hellhound on Hex](https://img.shields.io/hexpm/v/hellhound?label=Hex%3A%20hellhound)](https://hex.pm/packages/hellhound)
 [![Gleam](https://img.shields.io/badge/Gleam-FFAFF3?logo=gleam&logoColor=000000)](https://gleam.run/)
@@ -45,6 +53,15 @@ Commit `gleam.toml` and `manifest.toml` to retain the resolved versions. The
 integration used below.
 The optional [PostgreSQL adapter](integrations/hellhound_postgres/README.md)
 installs from a Git subdirectory.
+
+### Upgrading to 0.4.0
+
+Version 0.4.0 keeps each pending login in a sealed browser cookie instead of a
+server-side store, so a flood of login starts can no longer refuse other users'
+logins. Logins started before the upgrade must start again. The
+[migration guide](https://github.com/gleam-dream/hellhound/blob/main/docs/MIGRATION.md)
+lists every change with before and after code, and the cookie size, sealing-key
+and key-rotation requirements.
 
 ### Upgrading to 0.3.0
 

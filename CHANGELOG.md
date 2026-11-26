@@ -5,7 +5,55 @@ minor version may break compatibility.
 
 ## Unreleased
 
+Pending logins move from a server-side store into sealed per-login browser
+cookies. This release breaks the login API; the
+[migration guide](docs/MIGRATION.md) has before and after code for each change.
+Custody records keep their format, so installed sessions survive the upgrade;
+logins in flight during it must start again.
+
+### Changed
+
+- **`begin_login(client, options)` stores nothing on the server.** It seals
+  the pending login with the client's sealing key into a
+  `__Host-hellhound_login_<digest>` cookie that `login_response` sets. The
+  request argument is removed. A flood of login starts holds no server capacity.
+- **`config.with_sealing_key` seals login cookies too.** Give every node that
+  serves callbacks the same key. Without one, a callback must reach the node
+  that started the login, before a restart.
+- `SealingKeyRequired` is raised only for a custody store without a sealing
+  key.
+- `hellhound/testing.browser_request(redirect)` carries that login's cookie.
+- Depends on `sinal >= 0.2.0 and < 0.3.0` and `http_gun >= 0.4.0 and < 0.5.0`.
+  Telemetry handlers now belong to the process that attaches them (Sinal 0.2).
+
+### Added
+
+- `hellhound.callback_response(response, client, request)` expires the login
+  cookie on the callback response.
+- `BindingProblem` variants `LoginCookieMissing`, `LoginCookieInvalid` and
+  `ForeignLogin`, all mapped to `RejectRequest`.
+- `ConfigError.LoginCookieTooLarge`: the issuer, client id and longest
+  redirect URI must fit in 2 KiB together.
+
+### Removed
+
+- `config.with_transaction_store`, `config.with_max_pending_logins` and the
+  `MaxPendingLogins` limit.
+- `LoginError` variants `LoginStoreUnavailable`, `TooManyPendingLogins`,
+  `LoginReplayed`, `LoginChanged`, `TransactionStoreUnavailable` and
+  `LoginRecordUnreadable`; `BindingProblem` variants `UnknownState`,
+  `BrowserBindingMissing` and `BrowserBindingMismatch`.
+- The `__Host-hellhound_binding` cookie.
+
 ### Fixed
+
+- `hellhound.stop` stops a client started by another process. It used to wait
+  five seconds and leave the client running.
+- A code-exchange response without `scope` records the requested scopes, so
+  the first refresh that states the scope is no longer refused as a scope
+  change.
+- JWT validation and metadata reads take the provider snapshot without a
+  message to the cache process, so a busy cache no longer delays them.
 
 - The renewal circuit takes a probe as lost only after the renewal can no
   longer be running. Its lease left out the store calls, including a
