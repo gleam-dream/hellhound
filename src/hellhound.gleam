@@ -836,9 +836,15 @@ pub type LoginOptionProblem {
   /// `redirect_uri` is neither the configured redirect URI nor one of
   /// `config.with_allowed_redirect_uris`, compared exactly.
   RedirectUriNotAllowed
+  /// The sealed login cookie, with this login's scopes, would exceed the
+  /// 4 KiB a browser keeps per cookie, so its callback could never complete.
+  LoginCookieTooLarge
 }
 
 const max_option_bytes = 2048
+
+/// The bytes a browser keeps for one cookie's name and value.
+const max_cookie_bytes = 4096
 
 const reserved_parameters = [
   "response_type", "client_id", "redirect_uri", "state", "nonce", "scope",
@@ -923,10 +929,21 @@ pub fn begin_login(
       client_id: client.settings.client_id,
       expires_at: client.settings.clock() + lifetime,
     )
+  let cookie_name = login.cookie_name(state)
+  let cookie_value = login.seal(client.custody.keys, material)
+  use _ <- result.try(
+    case
+      string.byte_size(cookie_name) + 1 + string.byte_size(cookie_value)
+      <= max_cookie_bytes
+    {
+      True -> Ok(Nil)
+      False -> Error(InvalidLoginOption(LoginCookieTooLarge))
+    },
+  )
   Ok(LoginRedirect(
     url: redacted.new(url),
-    cookie_name: login.cookie_name(state),
-    cookie_value: redacted.new(login.seal(client.custody.keys, material)),
+    cookie_name:,
+    cookie_value: redacted.new(cookie_value),
     same_site: same_site(client.settings),
     max_age: lifetime,
   ))
@@ -1883,6 +1900,8 @@ pub fn describe_login_error(error: LoginError) -> String {
         InvalidMaxAge -> "max_age is negative"
         RedirectUriNotAllowed ->
           "the redirect URI is not the configured one or in config.with_allowed_redirect_uris (exact match)"
+        LoginCookieTooLarge ->
+          "the login cookie with these scopes would exceed the 4 KiB a browser keeps"
       }
     LoginNotConfigured -> "this client is not configured for login"
     LoginProviderUnavailable(failure) ->

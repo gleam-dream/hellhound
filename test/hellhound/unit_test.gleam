@@ -3,6 +3,7 @@
 //// foreign terms.
 
 import gleam/bit_array
+import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
 import gleam/string
@@ -450,4 +451,19 @@ pub fn login_cookie_must_fit_a_browser_cookie_test() {
     == [config.LoginCookieTooLarge]
   let fits = "https://app.example/" <> string.repeat("a", 1900)
   assert errors(config.with_allowed_redirect_uris(base(), [fits])) == []
+}
+
+/// Configured scopes are sealed into every login cookie, so they count
+/// towards the same budget as the issuer, client id and redirect URI.
+pub fn configured_scopes_count_towards_the_login_cookie_test() {
+  let fits = "https://app.example/" <> string.repeat("a", 1900)
+  let scopes =
+    list.repeat(Nil, 30)
+    |> list.index_map(fn(_, n) { "scope_" <> int.to_string(n + 1000) })
+  assert errors(
+      base()
+      |> config.with_allowed_redirect_uris([fits])
+      |> config.with_scopes(scopes),
+    )
+    == [config.LoginCookieTooLarge]
 }

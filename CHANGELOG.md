@@ -32,8 +32,10 @@ logins in flight during it must start again.
   cookie on the callback response.
 - `BindingProblem` variants `LoginCookieMissing`, `LoginCookieInvalid` and
   `ForeignLogin`, all mapped to `RejectRequest`.
-- `ConfigError.LoginCookieTooLarge`: the issuer, client id and longest
-  redirect URI must fit in 2 KiB together.
+- `ConfigError.LoginCookieTooLarge`: the issuer, client id, longest
+  redirect URI and configured scopes must fit in 2 KiB together.
+- `LoginOptionProblem.LoginCookieTooLarge`: `begin_login` refuses a login
+  whose sealed cookie, with its per-login scopes, would exceed 4 KiB.
 
 ### Removed
 

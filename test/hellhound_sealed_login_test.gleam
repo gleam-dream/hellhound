@@ -6,6 +6,7 @@
 
 import gleam/http/request.{type Request}
 import gleam/http/response
+import gleam/int
 import gleam/list
 import gleam/option.{Some}
 import gleam/string
@@ -331,4 +332,26 @@ pub fn login_cookie_attributes_and_clearing_test() {
   assert string.contains(form_set, "Path=/;")
   hellhound.stop(form_client)
   testing.stop_provider(provider)
+}
+
+/// Per-login scopes are sealed into the cookie too: `begin_login` refuses a
+/// login whose cookie a browser would not keep, instead of returning a
+/// redirect whose callback can only fail with `LoginCookieMissing`.
+pub fn login_cookie_too_large_for_a_browser_is_refused_test() {
+  let provider = support.provider_start(support.Standard)
+  let client = start(settings(provider))
+  let scopes = fn(count) {
+    list.repeat(Nil, count)
+    |> list.index_map(fn(_, n) {
+      "s" <> string.pad_start(int.to_string(n), 7, "0")
+    })
+  }
+  let options = fn(count) {
+    hellhound.LoginOptions(..hellhound.default_login(), scopes: scopes(count))
+  }
+  let assert Error(hellhound.InvalidLoginOption(hellhound.LoginCookieTooLarge)) =
+    hellhound.begin_login(client, options(400))
+  let assert Ok(redirect) = hellhound.begin_login(client, options(100))
+  let #(name, value) = login_cookie(redirect)
+  assert string.byte_size(name) + 1 + string.byte_size(value) <= 4096
 }

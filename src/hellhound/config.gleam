@@ -566,8 +566,9 @@ pub type ConfigError {
   ServiceClientNeedsCredentials
   /// A durable store is configured without `with_sealing_key`.
   SealingKeyRequired
-  /// The issuer, client id and longest redirect URI together exceed 2 KiB,
-  /// so the login cookie would exceed the 4 KiB a browser keeps.
+  /// The issuer, client id, longest redirect URI and configured scopes
+  /// together exceed 2 KiB, so the login cookie would exceed the 4 KiB a
+  /// browser keeps.
   LoginCookieTooLarge
 }
 
@@ -671,15 +672,25 @@ pub fn validate(config: Config) -> Result(Nil, List(ConfigError)) {
   }
 }
 
-/// The login cookie seals the issuer, client id and redirect URI with about
-/// 250 bytes of fixed material and grows by a third in base64url; 2 KiB of
-/// variable text keeps it under the 4 KiB a browser keeps per cookie.
+/// The login cookie seals the issuer, client id, redirect URI and requested
+/// scopes with about 250 bytes of fixed material and grows by a third in
+/// base64url; 2 KiB of variable text keeps it under the 4 KiB a browser
+/// keeps per cookie. Each configured scope costs its bytes plus 3 for its
+/// JSON quotes and separator. `begin_login` checks the sealed cookie itself,
+/// which also counts the per-login scopes.
 fn login_cookie_fits(config: Config) -> Bool {
   let longest =
     [config.redirect_uri, ..config.allowed_redirect_uris]
     |> list.map(string.byte_size)
     |> list.fold(0, int.max)
-  string.byte_size(config.issuer) + string.byte_size(config.client_id) + longest
+  let scopes =
+    config.scopes
+    |> list.map(fn(scope) { string.byte_size(scope) + 3 })
+    |> int.sum
+  string.byte_size(config.issuer)
+  + string.byte_size(config.client_id)
+  + longest
+  + scopes
   <= 2048
 }
 
@@ -728,7 +739,7 @@ pub fn describe_config_error(error: ConfigError) -> String {
       "service_client needs client authentication, not PublicClient"
     SealingKeyRequired -> "a durable store needs with_sealing_key"
     LoginCookieTooLarge ->
-      "the issuer, client id and longest redirect URI must fit in 2 KiB together, so the login cookie fits in 4 KiB"
+      "the issuer, client id, longest redirect URI and scopes must fit in 2 KiB together, so the login cookie fits in 4 KiB"
   }
 }
 

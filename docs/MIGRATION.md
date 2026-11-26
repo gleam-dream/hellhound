@@ -51,7 +51,7 @@ Not breaking, but visible:
 
 4. Serve the application over HTTPS on a host name. The `__Host-` prefix makes the browser keep the cookie only when it is `Secure`, `Path=/` and without `Domain`. The cookie is `HttpOnly` and `SameSite=Lax`, or `SameSite=None` with form-post callbacks.
 
-**Cookie size.** A login cookie is about 470 characters for a typical configuration and at most about 3.1 KiB, under the 4 KiB a browser keeps per cookie. With `Path=/`, the browser sends every pending login's cookie on every request to the host until the callback clears it or its `Max-Age` (the login lifetime, 10 minutes by default) ends. Ten abandoned logins add about 5 KiB to each request in that window. Check that the request-header limit of your server and proxies allows this.
+**Cookie size.** A login cookie is about 470 characters for a typical configuration. Configuration validation and `begin_login` keep it within the 4 KiB a browser keeps per cookie (see [A new configuration error](#a-new-configuration-error)). With `Path=/`, the browser sends every pending login's cookie on every request to the host until the callback clears it or its `Max-Age`, the login lifetime (`config.with_login_lifetime`), ends. Ten abandoned logins of a typical configuration add about 5 KiB to each request in that window. Check that the request-header limit of your server and proxies allows this.
 
 **Other effects.**
 
@@ -64,7 +64,7 @@ Not breaking, but visible:
 A login that 0.3 started has no 0.4 login cookie, and its server-side record is no longer read. When its callback reaches 0.4, `complete_login` returns `CallbackRejected(LoginCookieMissing)` and sends no token request. `login_error_action` maps it to `RejectRequest`.
 
 - Show a page that starts the login again on `RejectRequest` from the callback, rather than a bare error. The user signs in once more.
-- Only logins started within the login lifetime (10 minutes by default) before the upgrade are affected. Sessions already installed are unaffected: custody records keep their format.
+- Only logins started within one login lifetime (`config.with_login_lifetime`) before the upgrade are affected. Sessions already installed are unaffected: custody records keep their format.
 - During a rolling deployment, a login started on a 0.4 node fails on a 0.3 node and the reverse. Route callbacks to one version, or accept failed callbacks for one login lifetime.
 
 ## The sealing key also seals login cookies
@@ -95,7 +95,9 @@ All three new `BindingProblem` variants map to `RejectRequest`. The `telemetry.L
 
 ## A new configuration error
 
-`config.validate` and `hellhound.new` return `ConfigError.LoginCookieTooLarge` when the issuer, the client id and the longest redirect URI (the configured one or one passed to `with_allowed_redirect_uris`) exceed 2 KiB together, so that the login cookie fits in 4 KiB. Add the variant to exhaustive matches on `ConfigError`. Shorten the longest redirect URI if a configuration is refused.
+`config.validate` and `hellhound.new` return `ConfigError.LoginCookieTooLarge` when the issuer, the client id, the longest redirect URI (the configured one or one passed to `with_allowed_redirect_uris`) and the configured scopes exceed 2 KiB together, so that the login cookie fits in 4 KiB. Add the variant to exhaustive matches on `ConfigError`. Shorten the longest redirect URI or the scope list if a configuration is refused.
+
+`begin_login` also measures the sealed cookie, which includes the per-login scopes of `LoginOptions`. It returns `InvalidLoginOption(LoginCookieTooLarge)` (`FixConfiguration`) when the cookie would exceed 4 KiB, instead of a redirect whose callback could only fail. Add the variant to exhaustive matches on `LoginOptionProblem`.
 
 ## Sinal 0.2 and HTTP Gun 0.4
 
@@ -105,9 +107,9 @@ Hellhound telemetry handlers attached with `sinal.observe` now belong to the pro
 
 ## PostgreSQL adapter
 
-The adapter release that accepts Hellhound 0.4 serves custody only.
+`hellhound_postgres` 0.2.1 (Git tag `hellhound_postgres-v0.2.1`) is the adapter release that accepts Hellhound 0.4. It serves custody only. It is tagged after Hellhound 0.4.0 is on Hex; until then the adapter [README](https://github.com/gleam-dream/hellhound/blob/main/integrations/hellhound_postgres/README.md) shows 0.2.0, which requires Hellhound 0.3, so stay on Hellhound 0.3 until that tag exists.
 
-- Move to that `hellhound_postgres` tag and to `hellhound >= 0.4.0 and < 0.5.0` together, as its [README](https://github.com/gleam-dream/hellhound/blob/main/integrations/hellhound_postgres/README.md) shows.
+- Move to `ref = "hellhound_postgres-v0.2.1"` and to `hellhound >= 0.4.0 and < 0.5.0` together.
 - Delete `config.with_transaction_store(records)`. Keep `config.with_custody_store(records)` and `config.with_sealing_key(key)`.
 - Rows that 0.3 wrote as pending logins are no longer read. When the transaction store was the same store as custody, the session sweeper deletes them once they expire. When it was a separate table or schema, nothing deletes its rows: drop it after one login lifetime has passed since the upgrade.
 - The adapter's schema and the custody record format are unchanged.
