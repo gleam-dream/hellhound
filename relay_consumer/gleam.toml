@@ -9,9 +9,10 @@ gleam_erlang = ">= 1.0.0 and < 2.0.0"
 gleam_time = ">= 1.11.0 and < 2.0.0"
 hellhound = { path = ".." }
 # Relay is not on Hex yet: this pins the head of its integration branch
-# (gleam-dream/relay#34). Move it to Relay's Hex range once Relay 0.3.0 is
-# published. Its siblings come from Hex, as they do for Hellhound.
-relay = { git = "https://github.com/gleam-dream/relay.git", ref = "4374f1c69c05988b5743c9eaa8c4ebaa0c41af37" }
+# (gleam-dream/relay#34), which takes sinal, http_gun and json_blueprint from
+# Hex as Hellhound does. Move it to Relay's Hex range once Relay 0.3.0 is
+# published.
+relay = { git = "https://github.com/gleam-dream/relay.git", ref = "d059cf4d9f4622dd52f3eb10258db2f269cfe248" }
 json_blueprint = ">= 3.0.0 and < 4.0.0"
 http_gun = ">= 0.4.0 and < 0.5.0"
 sinal = ">= 0.2.0 and < 0.3.0"
