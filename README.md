@@ -17,7 +17,7 @@ Erlang/OTP. Hellhound manages provider discovery, signing keys and token custody
 your application owns its accounts, session cookies and permission checks.
 
 This package is pre-production. Production use requires the
-[release conditions](docs/design/design-layer.pdf) and independent security review of
+[release conditions](https://github.com/gleam-dream/hellhound/blob/main/docs/design/design-layer.pdf) and independent security review of
 Hellhound-owned code. Hellhound is not certified.
 
 ## Capabilities
@@ -31,7 +31,7 @@ Hellhound-owned code. Hellhound is not certified.
 - Standalone signed JWT assertions and configurable HTTPS credential exchange.
 - Supervised discovery and signing-key caches with restart-stable client handles.
 - Optional sealed durable custody through a conditional-record store, including
-  the separate [PostgreSQL adapter](integrations/hellhound_postgres/README.md).
+  the separate [PostgreSQL adapter](https://github.com/gleam-dream/hellhound/blob/main/integrations/hellhound_postgres/README.md).
 
 ## When to use Hellhound
 
@@ -49,9 +49,9 @@ gleam add hellhound
 ```
 
 Commit `gleam.toml` and `manifest.toml` to retain the resolved versions. The
-[reference application](consumer/) includes the HTTP dependencies and route
+[reference application](https://github.com/gleam-dream/hellhound/tree/main/consumer) includes the HTTP dependencies and route
 integration used below.
-The optional [PostgreSQL adapter](integrations/hellhound_postgres/README.md)
+The optional [PostgreSQL adapter](https://github.com/gleam-dream/hellhound/blob/main/integrations/hellhound_postgres/README.md)
 installs from a Git subdirectory.
 
 ### Upgrading to 0.4.0
@@ -68,7 +68,7 @@ and key-rotation requirements.
 Version 0.3.0 makes every session read return the claims of the latest verified
 ID token, and adds `hellhound.current_identity` for permission checks. It has
 breaking changes: new `SessionError` and `ProviderFailure` variants and a new
-field on the refresh telemetry event. [CHANGELOG.md](CHANGELOG.md) lists them
+field on the refresh telemetry event. [CHANGELOG.md](https://github.com/gleam-dream/hellhound/blob/main/CHANGELOG.md) lists them
 with migration notes.
 
 ### Upgrading from 0.1.0 to 0.2.0
@@ -100,9 +100,9 @@ possible transmission, and provider failures expose their status without raw
 response bodies. Transport validation failures take precedence over a provider status, including oversized or incomplete error bodies. Ordinary inspection of requests, assertions and returned tokens
 omits their credential material; explicit token accessors expose it for use.
 
-The compiled [GitHub App and OAuth service recipes](consumer/src/hellhound_reference/usage/assertion_exchange.gleam)
+The compiled [GitHub App and OAuth service recipes](https://github.com/gleam-dream/hellhound/blob/main/consumer/src/hellhound_reference/usage/assertion_exchange.gleam)
 show distinct claim profiles, credential placement, body encodings and absolute
-or relative expiry decoders. Their [consumer tests](consumer/test/assertion_exchange_test.gleam)
+or relative expiry decoders. Their [consumer tests](https://github.com/gleam-dream/hellhound/blob/main/consumer/test/assertion_exchange_test.gleam)
 run against a local HTTPS endpoint. These examples do not establish live GitHub
 acceptance or RFC 7523/8693 conformance.
 
@@ -194,8 +194,8 @@ pub fn logout(
 
 <!-- prettier-ignore-end -->
 
-The [complete module](consumer/src/hellhound_reference/usage/login.gleam) compiles in
-the reference consumer. Its [common-path test](consumer/test/hellhound_reference_test.gleam)
+The [complete module](https://github.com/gleam-dream/hellhound/blob/main/consumer/src/hellhound_reference/usage/login.gleam) compiles in
+the reference consumer. Its [common-path test](https://github.com/gleam-dream/hellhound/blob/main/consumer/test/hellhound_reference_test.gleam)
 exercises the equivalent login, token and logout flow against a local test provider.
 The application stores the session reference in its protected browser session.
 
@@ -359,7 +359,7 @@ The bound limits the age of the last ID token. A removed role is denied within
 it only if your provider evaluates claims again on refresh, so verify that for
 your provider, request a refresh token, and keep node clocks within the clock
 tolerance. `authentication_time`, `acr` and `amr` always read the login's
-values. The [complete module](consumer/src/hellhound_reference/usage/authorization.gleam)
+values. The [complete module](https://github.com/gleam-dream/hellhound/blob/main/consumer/src/hellhound_reference/usage/authorization.gleam)
 runs against the local test provider.
 
 ## How it works
@@ -379,7 +379,7 @@ it under your supervisor. Background discovery can return `ProviderNotReady`
 until metadata and keys arrive. A `Session` is an opaque custody reference, not
 an application session or permission grant.
 
-Use the [supervision example](consumer/src/hellhound_reference/usage/supervision.gleam)
+Use the [supervision example](https://github.com/gleam-dream/hellhound/blob/main/consumer/src/hellhound_reference/usage/supervision.gleam)
 for a long-lived service. Stop supervised clients through their parent; manually
 started clients need `hellhound.stop` after the application stops admitting work.
 Any process that holds the client can call it.
@@ -419,7 +419,7 @@ pub fn status(validator: resource.Validator, bearer: String) -> Int {
 
 <!-- prettier-ignore-end -->
 
-[Local validation](src/hellhound/resource.gleam) does not observe immediate token
+[Local validation](https://github.com/gleam-dream/hellhound/blob/main/src/hellhound/resource.gleam) does not observe immediate token
 revocation. A suitably authenticated service client can instead use
 `hellhound.introspect` to ask the provider for current token state. Resource-server
 configuration alone supplies no introspection credentials.
@@ -447,15 +447,15 @@ configuration alone supplies no introspection credentials.
 
 ## Examples and reference
 
-- [Usage modules](consumer/src/hellhound_reference/usage/): supervision, durable stores,
+- [Usage modules](https://github.com/gleam-dream/hellhound/tree/main/consumer/src/hellhound_reference/usage): supervision, durable stores,
   callback addresses, resource servers, permission checks on current claims and a
   local HTTPS test provider. For a local run
   with a real browser, the test provider can keep a fixed port and a loopback-only root
   the developer trusts once (`hellhound/testing`, development only).
-- [Relay integration](relay_consumer/src/recipe.gleam): JWT and introspection verifiers.
-- [PostgreSQL storage](integrations/hellhound_postgres/README.md): optional adapter;
+- [Relay integration](https://github.com/gleam-dream/hellhound/blob/main/relay_consumer/src/recipe.gleam): JWT and introspection verifiers.
+- [PostgreSQL storage](https://github.com/gleam-dream/hellhound/blob/main/integrations/hellhound_postgres/README.md): optional adapter;
   the core does not depend on it.
-- [Design](docs/design/design-layer.pdf): protocol scope, defaults and unresolved requirements.
-- [Oracle](docs/ORACLE.md) and [measurements](docs/BENCHMARKS.md): retained evidence
+- [Design](https://github.com/gleam-dream/hellhound/blob/main/docs/design/design-layer.pdf): protocol scope, defaults and unresolved requirements.
+- [Oracle](https://github.com/gleam-dream/hellhound/blob/main/docs/ORACLE.md) and [measurements](https://github.com/gleam-dream/hellhound/blob/main/docs/BENCHMARKS.md): retained evidence
   with its revisions and limits, not a release certification or current performance promise.
-- [Development commands](AGENTS.md): local checks, provider suites and browser tests.
+- [Development commands](https://github.com/gleam-dream/hellhound/blob/main/AGENTS.md): local checks, provider suites and browser tests.

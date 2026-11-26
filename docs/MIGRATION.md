@@ -16,7 +16,8 @@ Not breaking, but visible:
 
 - `hellhound.stop` now stops a client started by another process. In 0.3 it waited five seconds and left the client running, so the next `start` answered `AlreadyStarted`.
 - A code-exchange response without `scope` records the requested scopes. In 0.3 the session held no scopes, `Access.scopes` was `[]`, and the first refresh that stated a scope was refused as `RefreshedScopeChangeUnsupported`. Sessions installed by 0.3 with an empty scope set are not repaired.
-- JWT validation and metadata reads no longer pass through the provider-cache process, so a busy cache does not delay `resource.verify`.
+- JWT validation and metadata reads no longer pass through the provider-cache process, so a busy cache does not delay `resource.verify`. Each cache process publishes the provider snapshot it has accepted. A cache that supervision restarts publishes nothing until its own discovery is accepted, so in that window `begin_login`, `resource.verify` and refresh answer `ProviderNotReady` (`RetryLater`) instead of using the previous process's snapshot. Handle `ProviderNotReady` as `RetryLater`, as you already do while a supervised client starts.
+- A custom `hellhound/store` implementation receives custody records only. Hellhound writes no pending-login records, so a store that served `with_transaction_store` has nothing to keep for logins.
 
 ## Pending logins live in sealed browser cookies
 
@@ -47,7 +48,7 @@ Not breaking, but visible:
 
    `request` is the callback as a `Request(String)`: the query, or the form body read once.
 
-3. Delete every call to `config.with_transaction_store` and `config.with_max_pending_logins`. Both are removed. A store passed only to `with_transaction_store` is no longer used.
+3. Delete every call to `config.with_transaction_store` and `config.with_max_pending_logins`. Both are removed, and so is the `config.MaxPendingLogins` limit: remove it from matches on `config.Limit` (it appears in `ConfigError.InvalidLimit`). A store passed only to `with_transaction_store` is no longer used.
 
 4. Serve the application over HTTPS on a host name. The `__Host-` prefix makes the browser keep the cookie only when it is `Secure`, `Path=/` and without `Domain`. The cookie is `HttpOnly` and `SameSite=Lax`, or `SameSite=None` with form-post callbacks.
 

@@ -40,7 +40,7 @@ logins in flight during it must start again.
 ### Removed
 
 - `config.with_transaction_store`, `config.with_max_pending_logins` and the
-  `MaxPendingLogins` limit.
+  `config.MaxPendingLogins` limit.
 - `LoginError` variants `LoginStoreUnavailable`, `TooManyPendingLogins`,
   `LoginReplayed`, `LoginChanged`, `TransactionStoreUnavailable` and
   `LoginRecordUnreadable`; `BindingProblem` variants `UnknownState`,
@@ -55,7 +55,9 @@ logins in flight during it must start again.
   the first refresh that states the scope is no longer refused as a scope
   change.
 - JWT validation and metadata reads take the provider snapshot without a
-  message to the cache process, so a busy cache no longer delays them.
+  message to the cache process, so a busy cache no longer delays them. A
+  restarted cache answers `ProviderNotReady` until its own discovery is
+  accepted.
 
 - The renewal circuit takes a probe as lost only after the renewal can no
   longer be running. Its lease left out the store calls, including a
